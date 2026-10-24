@@ -10,7 +10,7 @@ project_knowledge: "{project-root}/docs"
 
 # Core Configuration Values
 user_name: Cdoye
-project_name: GDU_IA_Mobile
+project_name: GDU_TaskFlow
 communication_language: English
 document_output_language: English
 output_folder: _bmad-output

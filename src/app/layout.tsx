@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "GDU IA Mobile",
-  description: "Application mobile GDU IA",
+  title: "GDU TaskFlow",
+  description: "Application mobile GDU TaskFlow",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
