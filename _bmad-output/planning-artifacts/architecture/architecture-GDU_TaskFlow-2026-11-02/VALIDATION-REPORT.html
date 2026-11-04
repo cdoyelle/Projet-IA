@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Validation de l’architecture — TaskFlow Mobile</title>
+  <style>
+    :root { color-scheme: light; --ink:#192333; --muted:#536274; --line:#d7dee8; --blue:#164e86; --pale:#f1f6fb; --amber:#fff4d6; }
+    body { margin:0; background:#f7f9fc; color:var(--ink); font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { max-width:1000px; margin:32px auto; padding:32px; background:white; box-shadow:0 4px 24px #182b4414; }
+    h1,h2 { line-height:1.25; } h1 { color:var(--blue); } h2 { margin-top:2.2em; border-bottom:1px solid var(--line); padding-bottom:.35em; }
+    p,li { max-width:86ch; } table { border-collapse:collapse; width:100%; margin:1em 0 1.5em; font-size:.94em; }
+    th,td { border:1px solid var(--line); padding:10px 12px; text-align:left; vertical-align:top; } th { background:var(--pale); }
+    .verdict { padding:16px 20px; background:var(--amber); border-left:5px solid #c88900; }
+    .muted { color:var(--muted); } a { color:#075da5; } code { background:#f0f3f7; padding:2px 5px; }
+    @media(max-width:700px){ main{margin:0;padding:20px} table{font-size:.85em} }
+  </style>
+</head>
+<body><main>
+  <h1>Validation de l’architecture — TaskFlow Mobile</h1>
+  <p class="muted">4 novembre 2026 · PRD et addendum, expérience UX, design et architecture existante</p>
+  <p class="verdict"><strong>Verdict final : architecture validée et mise à jour.</strong> Les six corrections approuvées sont intégrées au spine. Le lint passe sans erreur et les revues de suivi confirment que la couverture PRD/UX est traçable; aucun blocage technique ne reste.</p>
+
+  <h2>En langage simple</h2>
+  <p>L’application sera faite pour iPhone/iPad et Android. Supabase gérera les comptes et les données; Gemini répondra à l’assistant depuis le serveur. Les droits et les changements d’état importants seront contrôlés dans la base.</p>
+  <p>Le principal risque de divergence est que deux écrans calculent différemment la progression, ou que l’application et le serveur ne s’accordent pas sur la forme des citations et erreurs. Il faut aussi décider comment garder visibles les tâches d’une personne retirée, et où déposer les tests manuels et le journal demandés.</p>
+
+  <h2>Couverture PRD et UX</h2>
+  <table><thead><tr><th>Exigences</th><th>Briques prévues</th><th>Évaluation</th></tr></thead><tbody>
+    <tr><td>FR-001–004, 033–035<br>Connexion, invitations, profil, comptes</td><td>Supabase Auth, profils, avatar éventuel, fonction admin, règles d’accès</td><td>Partielle : les responsabilités d’activation, profil/avatar et écrans admin restent groupées.</td></tr>
+    <tr><td>FR-005–011<br>Projets et membres</td><td>Tables projet/appartenance, écrans mobiles, règles d’accès</td><td>Globalement couvert; préciser la frontière des changements de projet et d’appartenance.</td></tr>
+    <tr><td>FR-012–020<br>Tâches, commentaires, filtres</td><td>PostgreSQL, fonction transactionnelle, écrans mobiles</td><td>Globalement couvert; tags et lien commentaire-projet/tâche absents du dessin.</td></tr>
+    <tr><td>FR-021–024<br>Tableau de bord</td><td>Lectures de base et écran Accueil</td><td>Partiel : mettre la formule exacte du PRD en un seul endroit partagé.</td></tr>
+    <tr><td>FR-025–032<br>Assistant</td><td>Fonction serveur, Gemini, recherche vectorielle</td><td>Couvert; contrat des réponses/citations entre mobile et serveur à préciser.</td></tr>
+    <tr><td>FR-036–039<br>États, accessibilité et installateur</td><td>Interface mobile, navigation, EAS</td><td>Couvert au niveau des briques.</td></tr>
+    <tr><td>FR-040–041<br>Essais manuels et journal</td><td>Aucun emplacement nommé</td><td>Non représenté dans la carte.</td></tr>
+  </tbody></table>
+  <p>Les neuf écrans UX — connexion/réinitialisation, accueil, projets, détail, Mes tâches, assistant, formulaires, membres, profil/administration — ont une brique générale plausible. Plusieurs ne sont toutefois pas nommés dans la carte d’architecture; une ligne par écran ou groupe cohérent rendra la couverture vérifiable. Les règles d’apparence de <code>DESIGN.md</code> restent des règles d’interface.</p>
+
+  <h2>Corrections proposées</h2>
+  <ol>
+    <li>Centraliser la formule exacte du tableau de bord.</li>
+    <li>Nommer les écrans et domaines de compte; ajouter tags, commentaire projet/tâche et état du compte au schéma conceptuel.</li>
+    <li>Fixer les règles partagées pour membres, projets fermés/annulés et affectations de comptes retirés/désactivés.</li>
+    <li>Décrire le format commun des erreurs, réponses de l’assistant et sources citées.</li>
+    <li>Indiquer où vivent les essais manuels, le journal et les données/scripts de démo.</li>
+    <li>Laisser l’avatar comme option à confirmer; l’import libre de documents reste hors périmètre.</li>
+  </ol>
+  <p>Ces corrections rendent le plan plus précis sans ajouter de fonctionnalité au produit.</p>
+
+  <h2>Ce que cela impose</h2>
+  <ul>
+    <li>Maintenir une application mobile; le site Next.js présent n’est pas le client visé.</li>
+    <li>Faire appliquer les droits par la base et le serveur, pas seulement par l’interface.</li>
+    <li>Actualiser les listes à la demande et afficher quand elles ont été lues pour la dernière fois.</li>
+    <li>Précharger des données fictives de projet pour la démonstration de l’assistant.</li>
+  </ul>
+
+  <h2>Coûts et déclencheurs</h2>
+  <p class="muted">Prix consultés le 4 novembre 2026, en USD avant taxes; ils peuvent changer.</p>
+  <table><thead><tr><th>Service</th><th>Quand payer</th><th>Repère</th></tr></thead><tbody>
+    <tr><td>Supabase</td><td>Si la démo doit rester éveillée ou si les quotas gratuits sont dépassés.</td><td>Free peut être mis en pause après une semaine d’inactivité faible. Pro dès 25 USD/mois. <a href="https://supabase.com/pricing">Tarifs</a> · <a href="https://supabase.com/docs/guides/platform/free-project-pausing">pause</a></td></tr>
+    <tr><td>Expo EAS</td><td>Si les builds cloud dépassent le quota gratuit ou nécessitent une priorité.</td><td>15 builds iOS et 15 Android/mois gratuits; Starter 19 USD/mois. <a href="https://expo.dev/pricing">Tarifs</a> · <a href="https://docs.expo.dev/billing/plans/">plans</a></td></tr>
+    <tr><td>Gemini</td><td>Selon le modèle, la facturation configurée et le volume d’appels.</td><td>Le coût est à l’usage; ne pas présumer que le quota gratuit suffit. <a href="https://ai.google.dev/gemini-api/docs/pricing">Tarifs API</a></td></tr>
+    <tr><td>Apple Developer</td><td>Si le mode de distribution iOS retenu l’exige, par exemple TestFlight.</td><td>99 USD/an; pas automatiquement requis par le MVP sans publication. <a href="https://developer.apple.com/programs/">Programme Apple</a></td></tr>
+    <tr><td>SMTP externe</td><td>Si l’envoi intégré ne suffit plus.</td><td>Coût inconnu tant que le fournisseur n’est pas choisi.</td></tr>
+  </tbody></table>
+  <p>Pour commencer, les offres gratuites peuvent suffire avec leurs limites. Le coût fixe probable est Supabase Pro à 25 USD/mois si la démo doit rester active sans pause. EAS payant et Apple ne sont pas automatiquement nécessaires.</p>
+
+  <h2>Changements coûteux plus tard</h2>
+  <ul>
+    <li>Quitter Supabase toucherait à la base, aux comptes, aux contrôles d’accès et aux fonctions serveur.</li>
+    <li>Ajouter une version navigateur demanderait une nouvelle interface.</li>
+    <li>Changer les règles de suppression ou de cycle de vie après utilisation des données demanderait des migrations et des changements d’écran.</li>
+    <li>Changer de modèle d’embeddings impose de recalculer les données de recherche.</li>
+    <li>Changer uniquement le modèle de génération est moins lourd grâce à l’interface serveur prévue.</li>
+  </ul>
+
+  <h2>Hypothèses non confirmées</h2>
+  <ul>
+    <li>Courriels Supabase au départ; fournisseur SMTP externe plus tard si besoin.</li>
+    <li>Modèles Gemini finaux, dimension des vecteurs, taille des passages et seuil de pertinence à confirmer par essai.</li>
+    <li>Avatar facultatif; décision d’implémentation non prise.</li>
+    <li>Mode d’installation iOS non choisi; abonnement Apple non confirmé comme nécessaire.</li>
+    <li>10 comptes/5 utilisateurs simultanés indicatifs; budget réel lié au trafic et à la disponibilité voulue.</li>
+    <li>Appareils et protocole de mesure des objectifs de performance à définir.</li>
+  </ul>
+
+  <h2>Décision prise et points à suivre</h2>
+  <p>Le commanditaire a validé les six corrections le 4 novembre 2026; elles ont été ajoutées à <code>ARCHITECTURE-SPINE.md</code>. Avant l’implémentation des fonctions membres, fixer si leur gestion est permise lorsque le projet est fermé ou annulé. Vérifier les chemins indiqués contre le futur espace d’implémentation, confirmer le budget après taux/taxes, et arrêter le mode d’installation iOS. Le fichier <a href="VALIDATION-REPORT.md">rapport Markdown</a> contient le détail des correspondances et les mêmes liens de tarifs.</p>
+</main></body></html>
