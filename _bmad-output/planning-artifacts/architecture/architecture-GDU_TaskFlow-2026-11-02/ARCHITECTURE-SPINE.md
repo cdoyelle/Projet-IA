@@ -5,9 +5,9 @@ purpose: build-substrate
 altitude: initiative
 paradigm: layered mobile client with policy-enforced Supabase backend
 scope: MVP mobile application for iOS and Android
-status: final
+status: draft
 created: 2026-11-02
-updated: 2026-11-04
+updated: 2026-11-06
 binds: [all]
 sources:
   - ../../prds/prd-GDU_TaskFlow-2026-10-27/prd.md
@@ -77,7 +77,7 @@ Layered client with PostgreSQL as the source of truth for application data and a
 
 - **Binds:** initial hosting and test builds.
 - **Prevents:** a builder adding an unnecessary web host or production environment to the demonstration MVP.
-- **Rule:** deploy Supabase in `eu-west-3` (Paris), use Expo EAS for installable cloud builds, and target 10 accounts / 5 concurrent users. Production operations, app-store distribution, and additional environments remain deferred.
+- **Rule:** deploy Supabase Free in `eu-west-3` (Paris), use Expo EAS Free for installable cloud builds, and target 10 accounts / 5 concurrent users. Keep the demo services at €0 by not linking paid billing; use Android APK or Expo Go for distribution. A Supabase inactivity pause and unavailable iOS standalone distribution are accepted demo limitations. Production operations, app-store distribution, and additional environments remain deferred.
 
 ### AD-10 — Keep project, membership, and comment writes within shared rules
 
@@ -89,13 +89,19 @@ Layered client with PostgreSQL as the source of truth for application data and a
 
 - **Binds:** mobile-to-Edge Function requests and responses; PRD FR-027–032, FR-036–037.
 - **Prevents:** screens and server functions interpreting citations, no-answer results, or failures differently.
-- **Rule:** keep one versioned TypeScript contract for Edge Function payloads and response envelopes. Success responses use named fields; failures use the stable error codes below. Assistant responses contain an answer and zero or more citations with source identity, display name, excerpt, and an in-app destination only when one exists; a no-source result is explicit. Validate the contract at the function boundary.
+- **Rule:** keep one versioned TypeScript contract for Edge Function payloads and response envelopes. Success responses use named fields; failures use stable codes `AUTH_REQUIRED`, `FORBIDDEN`, `VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`, `AI_UNAVAILABLE`, and `EMAIL_UNAVAILABLE`. Assistant responses contain an answer and zero or more citations with source identity, display name, excerpt, and an in-app destination only when one exists; a no-source result is explicit. Validate the contract at the function boundary.
 
 ### AD-12 — Keep account and assignment identity authoritative
 
 - **Binds:** profiles, roles, project membership and task assignment; PRD FR-003, FR-008, FR-011, FR-033–035.
 - **Prevents:** profile labels or cached membership state becoming a second source of truth.
 - **Rule:** Supabase Auth owns login identity; `profiles` owns editable names, avatar reference, and active state; global administrator role is server-owned. Project membership is authoritative in `project_members`; task assignment stores a profile ID. Membership removal clears affected assignment in the same transaction and immediately revokes project/assistant access. Account deactivation retains membership and assignment IDs, derives the disabled display from profile state, and restores access to prior tasks on reactivation.
+
+### AD-13 — Keep the demonstration within a zero-euro service budget
+
+- **Binds:** hosting, AI requests, authentication email delivery, and demonstration builds.
+- **Prevents:** a free quota being mistaken for an unlimited service or a paid overage being activated unintentionally.
+- **Rule:** use Supabase Free, Expo EAS Free, Gemini API Free, and Resend Free without attaching paid billing. Use Resend SMTP for Auth email only if an already-owned sender domain can be verified; otherwise external invitations are an unresolved €0 constraint. Keep all provider-sent content fictional. Enforce daily AI limits in PostgreSQL with one quota row per account/day and one global daily counter, reserved atomically before calling the provider so simultaneous requests cannot exceed either cap (initial assumptions: 10 questions/account and 50 total/day; every attempt consumes a slot). Return `AI_UNAVAILABLE` on either app limit or provider quota exhaustion, with no paid fallback.
 
 ## Consistency Conventions
 
@@ -107,7 +113,7 @@ Layered client with PostgreSQL as the source of truth for application data and a
 | Mutations | Database is authoritative; task, project lifecycle, and membership writes use transactional functions; refresh dashboard after confirmed writes. |
 | Comments | `comments` references exactly one project or task; database constraint enforces one target. RLS/function checks apply the PRD edit/delete and visibility rules. |
 | Tags | Project-owned tag; `task_tags` links tasks and tags only within the same project. |
-| API/error contract | Versioned Edge Function TypeScript contract; stable codes: `AUTH_REQUIRED`, `FORBIDDEN`, `VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`, `AI_UNAVAILABLE`. |
+| API/error contract | Versioned Edge Function TypeScript contract; stable codes: `AUTH_REQUIRED`, `FORBIDDEN`, `VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`, `AI_UNAVAILABLE`, `EMAIL_UNAVAILABLE`. |
 | Provider configuration | Server secrets only; model names and embedding dimensions are server configuration, never mobile constants; generation and embedding adapters stay separate. |
 
 ## Stack
@@ -133,6 +139,7 @@ Layered client with PostgreSQL as the source of truth for application data and a
 flowchart LR
   Mobile[Expo mobile UI and feature modules] --> SupabaseClient[Supabase client with user session]
   SupabaseClient --> Auth[Supabase Auth]
+  Auth --> Resend[Resend SMTP]
   SupabaseClient --> DB[(PostgreSQL, RLS, pgvector)]
   SupabaseClient --> Storage[(Supabase Storage)]
   SupabaseClient --> Edge[Supabase Edge Functions]
@@ -160,29 +167,27 @@ erDiagram
 
 | Capability / Screen | Owning building blocks | Governed by |
 |---|---|---|
-| Login / password reset; invitations; profile and account administration (FR-001–004, FR-033–035) | Supabase Auth; `profiles`; optional Storage avatar; admin Edge Function; Expo login, profile and account screens | AD-2, AD-5, AD-12 |
+| Login / password reset; invitations; profile and account administration (FR-001–004, FR-033–035) | Supabase Auth; Resend SMTP if an existing sender domain is available; `profiles`; optional Storage avatar; admin Edge Function; Expo login, profile and account screens | AD-2, AD-5, AD-12, AD-13 |
 | Projects list; project detail; project members (FR-005–011) | PostgreSQL `projects` / `project_members`; project lifecycle and membership functions; Expo project/detail/member screens | AD-2, AD-6, AD-10, AD-12 |
 | Task list / My Tasks; project/task forms; comments and filters (FR-012–020) | PostgreSQL `tasks`, `tags`, `task_tags`, `comments`; task mutation function; Expo task/form/comment screens | AD-2, AD-3, AD-6, AD-10, AD-12 |
 | Home / dashboard (FR-021–024) | Shared PostgreSQL dashboard query/view; Expo Home screen | AD-3, AD-7 |
 | Project assistant and sources (FR-025–032) | Knowledge source/chunk tables and pgvector; assistant Edge Function; Gemini adapters; Expo assistant screen | AD-2, AD-4, AD-5, AD-8, AD-11 |
-| Forms, French interface, accessibility, errors, session handling (FR-036–037) | Expo shared form/state/accessibility components; Supabase Auth and stable Edge error contract | AD-1, AD-5, AD-7, AD-11 |
+| Forms, French interface, accessibility, errors, session handling (FR-036–037) | Expo shared form/state/accessibility components; Supabase Auth and stable Edge error contract | AD-1, AD-5, AD-7, AD-11, AD-13 |
 | Demonstration flow and installable build (FR-038–039) | Fictional corpus in `supabase/seed.sql`, reset via `supabase/reset-demo.sql`; Expo app; EAS Build (Expo Build) | AD-1, AD-4, AD-9 |
 | Manual verification scenarios for three roles and RLS (FR-040) | Versioned checklist at `docs/verification/manual-test-scenarios.md` | AD-2, AD-3, AD-10 |
 | Vibe-coding decision and verification log (FR-041) | Versioned log at `docs/development/vibe-coding-log.md` | AD-1 |
 
 ## Deferred
 
-- [ASSUMPTION] Email delivery provider for invitations and password resets; start with Supabase's built-in sending for the demo and revisit when limits require SMTP.
 - Final generation model after a small French question quality / latency / cost comparison; `gemini-3.5-flash-lite` is the initial candidate.
 - Embedding chunk size, retrieval threshold, and manual answer-quality protocol; settle against the fictional demo corpus before loading it.
-- Email sending provider for invitations and password resets; begin with Supabase's built-in sending and add SMTP only if required.
+- Verify an already-owned sending domain for Resend before the demo; if none is available, external email invitations remain unresolved under the €0 cap. Supabase's built-in sender is currently limited to team addresses and 2 emails/hour.
 - Minimum supported mobile OS versions, based on the devices available for manual demonstration.
 - Exact Storage bucket, image limits, and avatar visibility policy; avatar upload is optional in the PRD and is not required until that feature is selected.
 - Seed and reset data live in `supabase/seed.sql` and `supabase/reset-demo.sql`; validate these paths against the Expo/Supabase implementation workspace before loading the demo corpus.
 - Whether project membership may be changed while a project is closed or cancelled; the PRD specifies the actors and active account requirement, but not this lifecycle edge. Decide before implementing those controls.
 - Exact install/distribution method for iOS demo devices; Apple Developer membership is not assumed unless the selected path requires it.
-- Provider billing and usage limits at implementation time. As checked 2026-11-04: Supabase Free can pause after a week of low activity; Pro starts at $25/month. EAS Free includes 15 iOS and 15 Android cloud builds per month; Starter is $19/month. Gemini billing depends on selected model and call volume. Apple Developer is $99/year for distribution paths that require membership. Recheck official pricing before enabling paid usage.
-- The €0–25/month starting budget is indicative. Confirm currency conversion, taxes, and whether it covers an always-on Supabase project before upgrading; set usage alerts/limits before enabling paid AI calls.
+- Recheck provider free quotas at implementation and immediately before the demo; Supabase can pause after 7 days of low activity, Gemini quotas may stop AI calls, EAS Free blocks further builds at the monthly limit, and Resend requires a verified sender domain. Paid upgrades are outside the approved €0 demo budget.
 - Pin TypeScript to the version selected by the Expo SDK 58 mobile starter and commit that app's lockfile; the existing Next.js lockfile is not the mobile app's dependency contract.
 - Performance acceptance protocol: reference device per platform, network, fictional dataset, and repeatable French question set; the PRD targets <3s for usual screens and <10s for 95th-percentile AI responses.
 - Production environment, backups/restore operations, monitoring policy, incident handling, privacy/compliance package, and app-store releases.

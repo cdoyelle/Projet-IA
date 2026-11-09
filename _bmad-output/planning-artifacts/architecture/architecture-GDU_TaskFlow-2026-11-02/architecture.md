@@ -1,7 +1,7 @@
 ---
 title: "Architecture proposée — TaskFlow Mobile"
 status: "à valider"
-date: 2026-11-02
+date: 2026-11-06
 sources:
   - ../../prds/prd-GDU_TaskFlow-2026-10-27/prd.md
   - ../../prds/prd-GDU_TaskFlow-2026-10-27/addendum.md
@@ -11,7 +11,7 @@ sources:
 
 # Architecture proposée — TaskFlow Mobile
 
-**À valider par le commanditaire.** Cette proposition couvre le MVP mobile de démonstration : 10 comptes prévus, jusqu’à 5 personnes connectées en même temps, budget initial de 0 à 25 €/mois, aucune publication en boutique.
+**À valider par le commanditaire.** Cette proposition couvre le MVP mobile de démonstration : petit groupe (hypothèse : 10 comptes au maximum et 5 personnes en même temps), budget de service de 0 €, aucune publication en boutique. L’assistant doit produire de vraies réponses; il utilisera les quotas gratuits de Gemini sans compte de facturation lié, donc il peut devenir temporairement indisponible si le quota est épuisé.
 
 ## Décisions en bref
 
@@ -19,7 +19,7 @@ sources:
 - Données, comptes et accès : **Supabase Auth et PostgreSQL**, protégés par les règles RLS de la base.
 - Assistant et opérations réservées à l’administration : **Supabase Edge Functions**, qui appellent l’API **Gemini** côté serveur.
 - Recherche documentaire : **pgvector** dans la même base Supabase; les connaissances de démonstration sont fictives et propres à chaque projet.
-- Hébergement de départ : Supabase Free et Expo EAS Free; passer à Supabase Pro si la démonstration doit rester disponible sans mise en veille.
+- Hébergement de départ : Supabase Free, Expo EAS Free et Gemini API Free; Resend Free fournit l’envoi d’e-mails Auth si un domaine d’envoi est déjà disponible. Aucun service payant ni compte de facturation ne doit être activé pour cette démo.
 
 ## Pourquoi ces outils ?
 
@@ -30,16 +30,17 @@ sources:
 | Expo Router | Écrans et navigation | Ses routes suivent les fichiers, ce qui rend les quatre onglets prévus faciles à retrouver. |
 | Expo SecureStore | Jetons de session mobiles | Il stocke les jetons dans le trousseau iOS ou le coffre Android au lieu d’un fichier ordinaire de l’application. |
 | Supabase Auth | Connexion, invitation, session et mot de passe | Il fournit les comptes et les sessions sans construire un système de mots de passe soi-même. |
+| Resend Free (SMTP personnalisé pour Supabase Auth) | E-mails d’invitation et de réinitialisation | Il permet d’envoyer les liens aux adresses de démonstration sans la limite du service e-mail intégré à Supabase, si un domaine existant peut être vérifié. |
 | Supabase PostgreSQL | Données des projets et des équipes | Une base relationnelle relie clairement utilisateurs, projets, tâches et commentaires. |
 | RLS (règles d’accès dans PostgreSQL) | Cloisonnement par utilisateur et projet | La base vérifie chaque ligne demandée, y compris si quelqu’un contourne l’interface mobile. |
 | Supabase Storage | Avatars facultatifs | Les images restent auprès des comptes et peuvent être protégées avec les mêmes règles d’accès. |
 | pgvector | Recherche parmi les sources d’un projet | Il compare les nombres produits par Gemini dans la même base que les projets, en conservant le filtre par projet. |
 | Supabase Edge Functions (TypeScript/Deno) | Assistant, invitations, désactivation de comptes | Ces petits programmes côté serveur gardent les clés secrètes hors du téléphone et regroupent les opérations sensibles. |
 | Interface `TextGenerator` + Gemini `gemini-3.5-flash-lite` | Réponses de l’assistant | Le serveur peut remplacer Gemini par un autre générateur sans changer l’écran ni la logique de recherche. |
-| Interface `EmbeddingProvider` + Gemini `gemini-embedding-2`, dimension 768 | Index et recherche des sources | Ce connecteur permet de changer séparément le modèle qui transforme les textes en vecteurs de nombres; 768 nombres prennent moins de place que le format maximal. |
+| Interface `EmbeddingProvider` + Gemini `gemini-embedding-2`, dimension 768 | Index et recherche des sources | Ce connecteur conserve la recherche par sens demandée au PRD et permet de changer séparément le modèle d’embedding sans changer l’application. |
 | Expo EAS Build | Création de fichiers installables iOS/Android depuis le cloud | Il évite d’installer et d’entretenir les outils natifs Apple et Android sur le PC Windows. |
 
-Les versions Expo/React Native et Gemini sont vérifiées dans leurs documentations officielles au 2 novembre 2026. L’application contient l’URL publique Supabase, la clé publishable et la session de la personne, mais aucune clé privée; les clés Gemini et Supabase privilégiées restent côté serveur.
+Les versions d’Expo/React Native et les forfaits gratuits ont été vérifiés dans les documentations officielles consultées le 6 novembre 2026. L’application contient l’URL publique Supabase, la clé publishable et la session de la personne, mais aucune clé privée; les clés Gemini et Supabase privilégiées restent côté serveur. Les appels Gemini gratuits peuvent servir à améliorer les produits Google : c’est pourquoi le corpus et les questions de démonstration doivent rester fictifs.
 
 ## Briques de l’application
 
@@ -50,12 +51,14 @@ flowchart TD
   Features[Fonctions : comptes, projets, tâches, tableau de bord, commentaires, assistant]
   Client[Accès Supabase avec session utilisateur]
   Auth[Supabase Auth]
+  Mail[Resend SMTP]
   DB[(PostgreSQL + RLS + pgvector)]
   Storage[(Storage : avatars)]
   Functions[Edge Functions : assistant et administration]
   Gemini[API Gemini : réponses et embeddings]
   Mobile --> UI --> Features --> Client
   Client --> Auth
+  Auth --> Mail
   Client --> DB
   Client --> Storage
   Client --> Functions
@@ -66,7 +69,7 @@ flowchart TD
 1. **Application mobile.** Expo Router organise en haut les onglets Accueil, Projets, Mes tâches et Assistant; ouvrir l’assistant conserve le projet choisi. Les mêmes écrans s’adaptent à la largeur tablette. Le thème et les repères visuels suivent `DESIGN.md`.
 2. **Fonctions métier sur le téléphone.** Les écrans présentent l’état de chargement, le résultat et les erreurs; ils gardent les formulaires en cours si le réseau échoue. Ils n’accordent jamais de droits eux-mêmes.
 3. **Accès direct à Supabase.** Le client lit les données et demande les modifications simples avec la session de la personne; PostgreSQL et RLS décident si l’opération est permise.
-4. **Fonctions serveur.** Chaque fonction vérifie d’abord le jeton courant, l’état actif du profil et la validité de sa session, avant de lire des données ou d’effectuer une action privilégiée. `assistant-answer` vérifie ensuite l’accès au projet, transforme la question en embedding, recherche les passages autorisés puis utilise `TextGenerator` pour rédiger la réponse. `EmbeddingProvider` et `TextGenerator` sont deux interfaces séparées; leurs adaptateurs Gemini ne sont pas référencés par les écrans métier. `index-demo-knowledge` prépare les embeddings des sources fictives. `admin-accounts` vérifie aussi le rôle administrateur avant d’inviter, désactiver ou réactiver un compte.
+4. **Fonctions serveur.** Chaque fonction vérifie d’abord le jeton courant, l’état actif du profil et la validité de sa session, avant de lire des données ou d’effectuer une action privilégiée. `assistant-answer` vérifie ensuite l’accès au projet, transforme la question en embedding, recherche les passages autorisés puis utilise `TextGenerator` pour rédiger la réponse. `EmbeddingProvider` et `TextGenerator` sont deux interfaces séparées; leurs adaptateurs Gemini ne sont pas référencés par les écrans métier. `index-demo-knowledge` prépare une fois les embeddings des sources fictives. Un quota interne par compte protège la démo; une erreur de quota Gemini (`429`) devient `AI_UNAVAILABLE` sans exposer le message fournisseur. `admin-accounts` vérifie aussi le rôle administrateur avant d’inviter, désactiver ou réactiver un compte.
 5. **Base et fichiers.** PostgreSQL stocke les données relationnelles et les passages vectorisés; Storage garde les avatars facultatifs.
 6. **Services externes.** Gemini produit les réponses et embeddings. EAS fabrique les builds installables; il n’héberge ni l’API métier ni les données.
 
@@ -144,24 +147,25 @@ Règles communes proposées :
 - **Révocation immédiate :** à la désactivation, la base marque le compte inactif et RLS bloque aussitôt ses demandes. Une petite fonction SQL en lecture seule et aux droits limités compare l’identifiant de la personne et de la session du jeton courant à la date de création de cette session dans Auth. Elle n’accepte aucun identifiant fourni par l’écran et ne renvoie qu’un oui/non. Après réactivation, les anciennes sessions restent bloquées et une nouvelle connexion est nécessaire. Le jeton peut rester valide jusqu’à expiration, mais ne permet pas de lire ni modifier les données protégées. Les fonctions serveur appliquent le même contrôle avant d’utiliser leurs droits privilégiés. L’application efface les données en mémoire et demande une nouvelle connexion après ce refus. Retirer un membre supprime l’accès au projet et à son assistant à la requête suivante.
 - **Projets annulés et clôturés :** un projet annulé n’est visible que par son propriétaire et les administrateurs; un projet clôturé est en lecture seule, hors commentaires. Les commentaires suivent les mêmes règles de visibilité que leur projet ou leur tâche.
 - **Assistant limité aux preuves :** `EmbeddingProvider` transforme la question et `TextGenerator` reçoit seulement les extraits retrouvés dans le projet auquel l’appelant a accès; chaque source affichée comporte son nom et l’extrait utilisé, plus un lien ouvrable dans l’application lorsqu’il existe. Une contrainte composée interdit de rattacher un extrait à une source d’un autre projet. L’assistant dit qu’aucune réponse n’a été trouvée si rien n’est assez pertinent; le seuil se choisit avec des questions françaises positives et sans réponse sur le corpus fictif, avant validation manuelle.
+- **Quota IA pour la démo :** PostgreSQL tient un compteur par compte et par jour ainsi qu’un compteur global. Une mise à jour atomique réserve la place avant l’appel au modèle pour que deux demandes simultanées ne dépassent pas les plafonds. Hypothèse initiale : 10 questions par compte et 50 questions au total par jour; toutes les tentatives, y compris celles refusées par Gemini, comptent. Si l’un de ces plafonds ou le quota Gemini est atteint, répondre `AI_UNAVAILABLE` sans basculer vers une facturation.
 
 ### Erreurs et retour à l’utilisateur
 
-La fonction serveur renvoie une erreur courte et stable (`AUTH_REQUIRED`, `FORBIDDEN`, `VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`, `AI_UNAVAILABLE`). L’application la traduit en français sans afficher la requête SQL, la clé, la trace technique ou le texte d’un autre projet. Une erreur réseau conserve la saisie, signale que les données visibles sont anciennes et propose « Réessayer ». Un refus de droit retire immédiatement le contenu protégé de l’écran. Une requête Gemini échouée garde la question et permet de recommencer.
+Les services et fonctions renvoient des erreurs courtes et stables (`AUTH_REQUIRED`, `FORBIDDEN`, `VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`, `AI_UNAVAILABLE`, `EMAIL_UNAVAILABLE`). L’application les traduit en français sans afficher la requête SQL, la clé, la trace technique ou le texte d’un autre projet. Une erreur réseau conserve la saisie, signale que les données visibles sont anciennes et propose « Réessayer ». Un refus de droit retire immédiatement le contenu protégé de l’écran. Une erreur de quota IA conserve la question et indique quand réessayer; une erreur d’envoi d’invitation demande à l’administrateur de réessayer plus tard ou de vérifier la configuration de courriel.
 
 ## Hébergement et coût au démarrage
 
 | Service | Départ proposé | Coût fixe indicatif | Quand payer ? |
 |---|---|---:|---|
-| Supabase Free, région Paris (`eu-west-3`) | Auth, PostgreSQL, RLS, Storage et Edge Functions | **0 $/mois** | Convient au développement et à une démo utilisée régulièrement; un projet gratuit est mis en pause après une semaine d’inactivité. |
-| Supabase Pro | Même projet sans mise en pause automatique | **25 $/mois** | À choisir si le lien de démo doit rester prêt à tout moment; le plan comprend des crédits de calcul pour un petit serveur. |
-| Gemini API | Un modèle Flash-Lite pour réponses, Embedding 2 pour index | **0 $ au quota gratuit**, puis facturation à l’usage | Flash-Lite : 0,30 $ par million de morceaux de texte reçus et 2,50 $ par million générés. Embedding 2 : 0,20 $ par million de morceaux traités. Un « jeton » est un petit morceau de texte; le coût varie avec la longueur des questions, sources et réponses. |
-| Expo EAS Free | Builds cloud limités pour essais | **0 $ au quota gratuit** | Un abonnement n’est utile que si les quotas gratuits ou la vitesse de build ne suffisent plus. |
-| Apple Developer Program | Signature et installation privée sur iPhone/iPad physiques | **99 $/an** (environ 8,25 $/mois) | Nécessaire pour distribuer un build iOS privé sur des appareils physiques; ce coût n’existe pas pour installer un APK Android. |
+| Supabase Free, région Paris (`eu-west-3`) | Auth, PostgreSQL, RLS, Storage et Edge Functions | **0 €/mois** | Le forfait comprend une petite base et un stockage adaptés au corpus de démo; un projet peu utilisé peut être mis en pause après 7 jours. |
+| Resend Free | SMTP pour les invitations et réinitialisations Supabase Auth | **0 €/mois si un domaine d’envoi existant est disponible** | Le plan gratuit autorise actuellement jusqu’à 3 000 e-mails par mois et 100 par jour; il faut prouver la possession du domaine. L’achat éventuel d’un domaine n’est pas compris dans les 0 €. |
+| Gemini API Free | `gemini-3.5-flash-lite` pour les réponses et `gemini-embedding-2` pour les embeddings | **0 € tant que le projet reste sans facturation liée et dans les quotas gratuits** | Quand le quota est atteint, l’API refuse temporairement les appels; l’application affiche « Assistant temporairement indisponible » et permet de réessayer plus tard. Les quotas dépendent du compte et peuvent changer. |
+| Expo EAS Free | Builds Android/iOS installables dans la limite mensuelle gratuite | **0 €/mois** | Le forfait gratuit offre actuellement jusqu’à 15 builds Android et 15 iOS par mois; les nouveaux builds attendent le renouvellement du quota au lieu de déclencher un dépassement facturé. |
+| Distribution de la démo | APK Android installable; iOS via Expo Go si compatible | **0 €** | La distribution privée d’un build iOS autonome sur appareils physiques peut demander l’adhésion Apple payante; elle n’est pas incluse dans le scénario à 0 €. |
 
-**Estimation pratique :** démarrer à **0 $/mois de services fixes**, plus les appels Gemini si le quota gratuit est dépassé. Pour une démonstration toujours disponible, prévoir **25 $/mois** pour Supabase Pro (environ **22,5 €/mois** au taux BCE du 29 octobre 2026), plus l’usage Gemini; le compte Apple annuel représente environ **7,4 €/mois** en moyenne et s’ajoute seulement si l’essai iOS se fait sur des appareils physiques. Les montants sont hors taxes et frais de conversion bancaire; les offres et tarifs peuvent changer. Les limites gratuites sont des quotas, pas une promesse de disponibilité.
+**Coût de démarrage prévu : 0 €/mois** pour l’hébergement et quelques builds de démonstration, sans carte ni compte de facturation rattaché à Gemini. Ce coût nul dépend des quotas gratuits : Supabase peut mettre en pause une base restée inactive une semaine, et les appels IA s’arrêtent quand le quota Gemini gratuit est atteint. La réponse IA reste réelle tant que l’API accepte les requêtes; aucun modèle simulé n’est présenté comme une vraie réponse. Les quotas gratuits ne garantissent ni disponibilité permanente ni débit constant.
 
-La région Paris est choisie pour rapprocher la base de l’équipe et y placer les données de démonstration. Cette localisation ne constitue pas, à elle seule, une certification de conformité réglementaire. Expo EAS produit les binaires, Supabase héberge le backend; la démo n’exige ni Vercel ni déploiement du squelette Next.js.
+La région Paris rapproche la base de l’équipe; cela ne constitue pas à elle seule une certification réglementaire. Expo EAS construit l’application mais ne l’héberge pas; Supabase héberge les données et fonctions. Le MVP ne nécessite ni Vercel ni déploiement du squelette Next.js. **Garde-fou de facturation :** ne pas lier de compte de paiement à Google AI Studio/Gemini ni à un forfait payant; vérifier le tableau de quota avant une session de démonstration.
 
 ## Hypothèses et questions à valider
 
@@ -169,10 +173,13 @@ Ces hypothèses sont visibles afin de pouvoir les corriger avant la conception d
 
 - **[HYPOTHÈSE]** Le propriétaire est unique par projet (`projects.owner_id`); les autres membres sont dans `project_members`. Le propriétaire garde ses droits et peut recevoir une tâche même sans ligne d’appartenance membre.
 - **[HYPOTHÈSE]** Expo SecureStore convient au stockage de session Supabase; confirmer la taille réelle d’une session et du jeton sur les comptes de démonstration avant de figer l’adaptateur, car le stockage natif peut refuser de grandes valeurs.
-- **[HYPOTHÈSE]** L’équipe utilise d’abord l’envoi d’e-mails intégré de Supabase pour invitations et réinitialisations. Un fournisseur SMTP dédié peut être ajouté si les limites de démonstration deviennent insuffisantes; le choix du fournisseur reste ouvert.
+- **[HYPOTHÈSE]** Les invitations et réinitialisations passent par Resend Free configuré comme SMTP personnalisé de Supabase Auth. Cette hypothèse de coût nul suppose qu’un domaine d’envoi est déjà détenu et peut être vérifié; sans cela, Supabase Free n’envoie qu’aux membres de l’organisation (limite actuelle : 2 e-mails par heure) et l’envoi aux comptes externes n’est pas assuré.
 - **[HYPOTHÈSE]** `gemini-3.5-flash-lite` est le premier candidat pour la génération, sous réserve d’un essai manuel des questions françaises prévues au PRD avant de figer le modèle. Les questions pertinentes et non pertinentes servent aussi à régler le seuil qui déclenche la réponse « source introuvable ».
+- **[HYPOTHÈSE]** La démo utilise uniquement le niveau gratuit Gemini avec `gemini-embedding-2` et `gemini-3.5-flash-lite`, sans rattacher de facturation; les quotas réels sont à vérifier dans AI Studio juste avant la démo. L’application limite par défaut un compte à 10 questions par jour et l’ensemble de la démo à 50 questions par jour; ces nombres sont à ajuster avant les essais.
+- **[HYPOTHÈSE À VALIDER]** « Invalider la session » lors d’une désactivation signifie que l’application refuse immédiatement toute lecture ou écriture protégée et efface son contenu local. Un jeton d’accès déjà émis peut garder une signature valide jusqu’à son expiration; RLS et chaque fonction serveur vérifient donc le compte et la session avant d’autoriser une action.
 - **[HYPOTHÈSE]** Les données utilisées dans Gemini restent fictives, conformément au PRD; aucun document réel ou contenu sensible de projet n’est envoyé dans le forfait gratuit.
-- **[HYPOTHÈSE]** Les essais Android utilisent un APK installable. Un essai iOS sur appareils physiques pourra demander l’adhésion Apple à 99 $/an; cela porte le coût total au-delà de la limite mensuelle si Supabase Pro est également activé.
+- **[HYPOTHÈSE]** Android est la plateforme de démonstration installable sans frais; les essais iOS utilisent Expo Go si toutes les fonctions sont compatibles. Un build iOS autonome sur appareils physiques nécessiterait un budget distinct et une vérification des exigences Apple à ce moment-là.
+- **[HYPOTHÈSE]** L’équipe accepte que la base gratuite puisse demander une reprise manuelle après une semaine sans activité et que l’assistant puisse être limité si le quota gratuit est consommé.
 - **[À confirmer plus tard]** Les trois comptes de démonstration (administrateur, propriétaire, membre) et les scénarios manuels du PRD sont les données de départ; aucune importation libre de fichiers n’est prévue.
 - **[À confirmer plus tard]** Les politiques de conservation des journaux, la production, la sauvegarde de continuité et le déploiement multi-environnements sont hors de ce MVP de démonstration.
 
@@ -188,13 +195,15 @@ Le dépôt contient actuellement Next.js et `@supabase/supabase-js`, mais le PRD
 - [Supabase — tarifs](https://supabase.com/pricing), [régions disponibles](https://supabase.com/docs/guides/platform/regions) et [Edge Functions](https://supabase.com/docs/guides/functions)
 - [Supabase — mise en veille des projets gratuits](https://supabase.com/kb/faqs/platform/free-project-pausing)
 - [Supabase — sessions et jetons](https://supabase.com/docs/guides/auth/sessions)
+- [Supabase — configuration SMTP et limites du service e-mail intégré](https://supabase.com/docs/guides/auth/auth-smtp) et [limites d’envoi Auth](https://supabase.com/docs/guides/auth/rate-limits)
 - [Supabase — champs des jetons](https://supabase.com/docs/guides/auth/jwt-fields)
 - [Supabase — règles RLS](https://supabase.com/docs/guides/database/postgres/row-level-security) et [fonctions SQL](https://supabase.com/docs/guides/database/functions)
-- [Google — tarifs Gemini API](https://ai.google.dev/gemini-api/docs/pricing) et [modèles d’embeddings](https://ai.google.dev/gemini-api/docs/embeddings)
+- [Google — tarifs Gemini API](https://ai.google.dev/gemini-api/docs/pricing), [modèles disponibles](https://ai.google.dev/gemini-api/docs/models) et [limites de requêtes](https://ai.google.dev/gemini-api/docs/rate-limits)
+- [Resend — tarifs du plan gratuit](https://resend.com/pricing)
 - [Apple — adhésion au programme développeur](https://developer.apple.com/programs/)
 - [Node.js — versions prises en charge](https://nodejs.org/en/about/previous-releases)
 - [BCE — taux EUR/USD](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html) (taux du 29 octobre 2026 utilisé pour l’ordre de grandeur)
 
 ---
 
-**Validation demandée :** confirmer les droits décrits, le coût acceptable pour une démo toujours disponible, et si un build iOS sur appareil physique est nécessaire au MVP.
+**Validation demandée :** confirmer les droits décrits et accepter les limites du scénario à 0 € : mise en veille possible de Supabase, quotas Gemini qui peuvent interrompre temporairement l’assistant, et APK Android comme voie d’installation sans frais.
