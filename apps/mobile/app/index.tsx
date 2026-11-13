@@ -1,19 +1,24 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
-import { Redirect } from 'expo-router';
+import { Redirect, type Href } from 'expo-router';
 import { supabase } from '@/src/lib/supabase';
 import { useTheme } from '@/src/lib/theme';
 
 export default function Index() {
   const theme = useTheme();
-  const [destination, setDestination] = useState<'/accounts' | '/sign-in' | null>(null);
+  const [destination, setDestination] = useState<Href | null>(null);
 
   useEffect(() => {
     let active = true;
     async function resolveSession() {
       try {
         const { data, error } = await supabase.auth.getSession();
-        if (error || !data.session) {
+        if (error) {
+          try { await supabase.auth.signOut(); } catch { /* ignore */ }
+          if (active) setDestination('/sign-in?reason=expired');
+          return;
+        }
+        if (!data.session) {
           if (active) setDestination('/sign-in');
           return;
         }
@@ -22,17 +27,14 @@ export default function Index() {
           .select('role, active')
           .eq('id', data.session.user.id)
           .maybeSingle();
-        if (profileError) {
-          if (active) setDestination('/sign-in');
-          return;
-        }
-        if (!profile?.active || profile.role !== 'admin') {
+        if (profileError || !profile?.active) {
           try { await supabase.auth.signOut(); } catch { /* ignore */ }
-          if (active) setDestination('/sign-in');
+          if (active) setDestination('/sign-in?reason=expired');
           return;
         }
-        if (active) setDestination('/accounts');
+        if (active) setDestination('/home');
       } catch {
+        try { await supabase.auth.signOut(); } catch { /* ignore */ }
         if (active) setDestination('/sign-in');
       }
     }

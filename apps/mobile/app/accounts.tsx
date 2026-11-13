@@ -1,13 +1,20 @@
-import { type ComponentRef, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { type ComponentRef, useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, AppState, KeyboardAvoidingView, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Redirect, useRouter } from 'expo-router';
+import { Redirect, type Href, useRouter } from 'expo-router';
 import { useTheme } from '@/src/lib/theme';
 import { supabase } from '@/src/lib/supabase';
 import type { CreateDemoAccountRequest, CreateDemoAccountSuccess, EdgeErrorCode, EdgeErrorResponse } from '@/src/lib/contracts';
 
 type FieldErrors = { firstName?: string; lastName?: string; email?: string };
 type TextInputInstance = ComponentRef<typeof TextInput>;
+
+function isAuthRejection(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  const code = error.code ?? '';
+  const msg = error.message?.toLowerCase() ?? '';
+  return code === 'PGRST301' || code === '42501' || msg.includes('jwt') || msg.includes('unauthorized');
+}
 
 async function readFunctionErrorCode(error: unknown, response?: Response): Promise<EdgeErrorCode | undefined> {
   const context = response ?? (
@@ -52,12 +59,17 @@ export default function Accounts() {
   const horizontalGutter = width >= 768 ? 28 : 16;
 
   const mountedRef = useRef(true);
+  const signingOutRef = useRef(false);
+  const hasVerifiedRef = useRef(false);
+  const checkSeqRef = useRef(0);
   const firstNameRef = useRef<TextInputInstance>(null);
   const lastNameRef = useRef<TextInputInstance>(null);
   const emailRef = useRef<TextInputInstance>(null);
 
   const [checking, setChecking] = useState(true);
   const [authorized, setAuthorized] = useState(false);
+  const [redirectHref, setRedirectHref] = useState<Href>('/sign-in?reason=expired');
+  const [signingOut, setSigningOut] = useState(false);
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
@@ -68,70 +80,125 @@ export default function Accounts() {
   const [password, setPassword] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    mountedRef.current = true;
-    async function verifyAccess() {
-      try {
-        const { data, error: sessionError } = await supabase.auth.getSession();
-        if (sessionError || !data.session) {
-          if (mountedRef.current) {
-            setAuthorized(false);
-            setChecking(false);
-            router.replace('/sign-in');
-          }
-          return;
-        }
-        const { data: profile, error } = await supabase
-          .from('profiles')
-          .select('role, active')
-          .eq('id', data.session.user.id)
-          .maybeSingle();
-        if (error) {
-          if (mountedRef.current) {
-            setAuthorized(false);
-            setChecking(false);
-            router.replace('/sign-in');
-          }
-          return;
-        }
-        const isAllowed = profile?.active === true && profile.role === 'admin';
-        if (!isAllowed) {
+  const verifyAccess = useCallback(async () => {
+    const seq = ++checkSeqRef.current;
+    try {
+      const { data, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !data.session) {
+        if (sessionError) {
           try { await supabase.auth.signOut(); } catch { /* ignore */ }
-          if (mountedRef.current) {
-            setAuthorized(false);
-            setChecking(false);
-            router.replace('/sign-in');
-          }
+        }
+        if (mountedRef.current && !signingOutRef.current && seq === checkSeqRef.current) {
+          const target: Href = '/sign-in?reason=expired';
+          hasVerifiedRef.current = false;
+          setRedirectHref(target);
+          setAuthorized(false);
+          setPassword(null);
+          setChecking(false);
+          router.replace(target);
+        }
+        return;
+      }
+      const { data: profile, error } = await supabase
+        .from('profiles')
+        .select('role, active')
+        .eq('id', data.session.user.id)
+        .maybeSingle();
+      if (error) {
+        if (hasVerifiedRef.current && !isAuthRejection(error)) {
           return;
         }
-        if (mountedRef.current) {
-          setAuthorized(true);
-          setChecking(false);
-        }
-      } catch {
-        if (mountedRef.current) {
+        try { await supabase.auth.signOut(); } catch { /* ignore */ }
+        if (mountedRef.current && !signingOutRef.current && seq === checkSeqRef.current) {
+          hasVerifiedRef.current = false;
+          setRedirectHref('/sign-in?reason=expired');
           setAuthorized(false);
+          setPassword(null);
           setChecking(false);
-          router.replace('/sign-in');
+          router.replace('/sign-in?reason=expired');
         }
+        return;
       }
-    }
-    verifyAccess();
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session && mountedRef.current) {
+      if (!profile?.active) {
+        try { await supabase.auth.signOut(); } catch { /* ignore */ }
+        if (mountedRef.current && !signingOutRef.current && seq === checkSeqRef.current) {
+          hasVerifiedRef.current = false;
+          setRedirectHref('/sign-in?reason=expired');
+          setAuthorized(false);
+          setPassword(null);
+          setChecking(false);
+          router.replace('/sign-in?reason=expired');
+        }
+        return;
+      }
+      if (profile.role !== 'admin') {
+        if (mountedRef.current && !signingOutRef.current && seq === checkSeqRef.current) {
+          hasVerifiedRef.current = false;
+          setRedirectHref('/home');
+          setAuthorized(false);
+          setPassword(null);
+          setChecking(false);
+          router.replace('/home');
+        }
+        return;
+      }
+      if (mountedRef.current && !signingOutRef.current && seq === checkSeqRef.current) {
+        hasVerifiedRef.current = true;
+        setAuthorized(true);
+        setChecking(false);
+      }
+    } catch {
+      if (hasVerifiedRef.current) {
+        return;
+      }
+      try { await supabase.auth.signOut(); } catch { /* ignore */ }
+      if (mountedRef.current && !signingOutRef.current && seq === checkSeqRef.current) {
+        hasVerifiedRef.current = false;
+        setRedirectHref('/sign-in?reason=expired');
         setAuthorized(false);
         setPassword(null);
-        router.replace('/sign-in');
+        setChecking(false);
+        router.replace('/sign-in?reason=expired');
+      }
+    }
+  }, [router]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    verifyAccess();
+
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!mountedRef.current) return;
+      if (!session || event === 'SIGNED_OUT') {
+        const target: Href = signingOutRef.current ? '/sign-in' : '/sign-in?reason=expired';
+        hasVerifiedRef.current = false;
+        setRedirectHref(target);
+        setAuthorized(false);
+        setPassword(null);
+        setChecking(false);
+        router.replace(target);
+        return;
+      }
+      if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+        verifyAccess();
       }
     });
+
+    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active' && mountedRef.current && !signingOutRef.current) {
+        verifyAccess();
+      }
+    });
+
     return () => {
       mountedRef.current = false;
       listener.subscription.unsubscribe();
+      appStateSubscription.remove();
     };
-  }, [router]);
+  }, [router, verifyAccess]);
 
   async function createAccount() {
-    if (loading) return;
+    if (loading || signingOut) return;
     const errors: FieldErrors = {};
     const trimmedFirstName = firstName.trim();
     const trimmedLastName = lastName.trim();
@@ -170,15 +237,22 @@ export default function Accounts() {
       const { data, error, response } = await supabase.functions.invoke<CreateDemoAccountSuccess & Partial<EdgeErrorResponse>>('admin-accounts', {
         body: payload,
       });
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || signingOutRef.current) return;
       if (error || typeof data?.password !== 'string' || !data.password) {
         const code = data?.code ?? await readFunctionErrorCode(error, response);
-        if (!mountedRef.current) return;
-        if (code === 'AUTH_REQUIRED' || code === 'FORBIDDEN') {
+        if (!mountedRef.current || signingOutRef.current) return;
+        if (code === 'FORBIDDEN') {
+          await verifyAccess();
+          return;
+        }
+        if (code === 'AUTH_REQUIRED') {
+          hasVerifiedRef.current = false;
           setAuthorized(false);
           setPassword(null);
           try { await supabase.auth.signOut(); } catch { /* ignore */ }
-          router.replace('/sign-in');
+          if (!mountedRef.current || signingOutRef.current) return;
+          setRedirectHref('/sign-in?reason=expired');
+          router.replace('/sign-in?reason=expired');
           return;
         }
         setMessage(
@@ -199,7 +273,7 @@ export default function Accounts() {
       setEmail('');
       setFieldErrors({});
     } catch {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || signingOutRef.current) return;
       setMessage('Impossible de créer le compte. Vérifiez votre connexion, puis réessayez.');
       setMessageIsError(true);
     } finally {
@@ -217,15 +291,23 @@ export default function Accounts() {
   }
 
   async function signOut() {
-    mountedRef.current = false;
+    if (signingOut) return;
+    signingOutRef.current = true;
+    checkSeqRef.current += 1;
+    hasVerifiedRef.current = false;
+    setSigningOut(true);
     setPassword(null);
+    setRedirectHref('/sign-in');
     try {
       await supabase.auth.signOut();
     } catch {
       // Ignore keystore/network errors on sign-out and redirect to sign-in.
     } finally {
-      setAuthorized(false);
-      router.replace('/sign-in');
+      if (mountedRef.current) {
+        setAuthorized(false);
+        setSigningOut(false);
+        router.replace('/sign-in');
+      }
     }
   }
 
@@ -236,7 +318,7 @@ export default function Accounts() {
       </View>
     );
   }
-  if (!authorized) return <Redirect href="/sign-in" />;
+  if (!authorized) return <Redirect href={redirectHref} />;
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.surface }]}>
@@ -248,14 +330,27 @@ export default function Accounts() {
                 <Text style={[styles.brand, { color: theme.primary }]}>TaskFlow · Administration</Text>
                 <Text accessibilityRole="header" style={[styles.title, { color: theme.ink }]}>Créer un compte de démonstration</Text>
               </View>
-              <TouchableOpacity
-                accessibilityRole="button"
-                accessibilityLabel="Se déconnecter"
-                onPress={signOut}
-                style={[styles.signout, { backgroundColor: theme.subtle, borderColor: theme.border }]}
-              >
-                <Text style={[styles.signoutText, { color: theme.ink }]}>Déconnexion</Text>
-              </TouchableOpacity>
+              <View style={styles.headerActions}>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Retour à l’accueil"
+                  disabled={signingOut}
+                  onPress={() => router.replace('/home')}
+                  style={[styles.signout, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                >
+                  <Text style={[styles.signoutText, { color: theme.ink }]}>Accueil</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Se déconnecter"
+                  accessibilityState={{ disabled: signingOut, busy: signingOut }}
+                  disabled={signingOut}
+                  onPress={signOut}
+                  style={[styles.signout, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                >
+                  <Text style={[styles.signoutText, { color: theme.ink }]}>Se déconnecter</Text>
+                </TouchableOpacity>
+              </View>
             </View>
             <Text style={[styles.intro, { color: theme.muted }]}>
               Le mot de passe sera généré après validation et affiché une seule fois pour remise hors application. Aucun courriel n’est envoyé.
@@ -267,7 +362,7 @@ export default function Accounts() {
               accessibilityLabel="Prénom"
               accessibilityHint={fieldErrors.firstName}
               autoComplete="given-name"
-              editable={!loading}
+              editable={!loading && !signingOut}
               maxLength={100}
               value={firstName}
               onFocus={() => setFocusedField('firstName')}
@@ -295,7 +390,7 @@ export default function Accounts() {
               accessibilityLabel="Nom"
               accessibilityHint={fieldErrors.lastName}
               autoComplete="family-name"
-              editable={!loading}
+              editable={!loading && !signingOut}
               maxLength={100}
               value={lastName}
               onFocus={() => setFocusedField('lastName')}
@@ -325,7 +420,7 @@ export default function Accounts() {
               autoCapitalize="none"
               autoComplete="email"
               keyboardType="email-address"
-              editable={!loading}
+              editable={!loading && !signingOut}
               value={email}
               onFocus={() => setFocusedField('email')}
               onBlur={() => setFocusedField((prev) => (prev === 'email' ? null : prev))}
@@ -349,14 +444,14 @@ export default function Accounts() {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Créer le compte"
-              accessibilityState={{ disabled: loading, busy: loading }}
-              disabled={loading}
+              accessibilityState={{ disabled: loading || signingOut, busy: loading }}
+              disabled={loading || signingOut}
               onPress={createAccount}
               style={({ pressed }) => [
                 styles.button,
                 {
                   backgroundColor: pressed ? theme.primaryPressed : theme.primary,
-                  opacity: loading ? 0.7 : 1,
+                  opacity: loading || signingOut ? 0.7 : 1,
                 },
               ]}
             >
@@ -411,6 +506,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 },
   headerText: { flex: 1, minWidth: 200 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   brand: { fontSize: 15, fontWeight: '700', marginBottom: 6 },
   title: { fontSize: 26, lineHeight: 33, fontWeight: '700' },
   intro: { fontSize: 16, lineHeight: 24, marginTop: 12, marginBottom: 20 },

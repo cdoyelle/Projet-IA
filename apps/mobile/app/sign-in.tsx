@@ -1,19 +1,37 @@
-import { type ComponentRef, useRef, useState } from 'react';
+import { type ComponentRef, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTheme } from '@/src/lib/theme';
 import { supabase } from '@/src/lib/supabase';
 
 type SignInFieldErrors = { email?: string; password?: string };
 type TextInputInstance = ComponentRef<typeof TextInput>;
 
+function isInvalidCredentialsError(authError: { code?: string; status?: number; message?: string } | null): boolean {
+  if (!authError) return false;
+  const msg = authError.message?.toLowerCase() ?? '';
+  return (
+    authError.code === 'invalid_credentials' ||
+    msg.includes('invalid login credentials') ||
+    msg.includes('invalid_credentials')
+  );
+}
+
+function isBannedUserError(authError: { code?: string; message?: string } | null): boolean {
+  if (!authError) return false;
+  const msg = authError.message?.toLowerCase() ?? '';
+  return authError.code === 'user_banned' || msg.includes('banned');
+}
+
 export default function SignIn() {
   const theme = useTheme();
   const router = useRouter();
+  const { reason } = useLocalSearchParams<{ reason?: string }>();
   const { width } = useWindowDimensions();
   const horizontalGutter = width >= 768 ? 28 : 16;
 
+  const mountedRef = useRef(true);
   const emailRef = useRef<TextInputInstance>(null);
   const passwordRef = useRef<TextInputInstance>(null);
 
@@ -23,6 +41,22 @@ export default function SignIn() {
   const [fieldErrors, setFieldErrors] = useState<SignInFieldErrors>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [dismissedNotice, setDismissedNotice] = useState(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (reason === 'expired') {
+      setDismissedNotice(false);
+    }
+  }, [reason]);
+
+  const showExpiredNotice = reason === 'expired' && !dismissedNotice && !error;
 
   async function submit() {
     if (loading) return;
@@ -36,6 +70,7 @@ export default function SignIn() {
     }
     setFieldErrors(nextErrors);
     setError('');
+    setDismissedNotice(true);
     if (Object.keys(nextErrors).length > 0) {
       if (nextErrors.email) emailRef.current?.focus();
       else if (nextErrors.password) passwordRef.current?.focus();
@@ -43,34 +78,55 @@ export default function SignIn() {
     }
 
     setLoading(true);
+    let signedIn = false;
     try {
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
         email: trimmedEmail.toLowerCase(),
         password,
       });
       if (authError || !authData.user) {
-        setError('Connexion impossible. Vérifiez vos identifiants ou votre connexion, puis réessayez.');
+        if (!mountedRef.current) return;
+        if (isBannedUserError(authError)) {
+          setPassword('');
+          setError('Ce compte n’est plus actif. Contactez votre administrateur.');
+        } else if (isInvalidCredentialsError(authError)) {
+          setPassword('');
+          setError('Adresse e-mail ou mot de passe incorrect. Vérifiez vos identifiants, puis réessayez.');
+        } else {
+          setError('Connexion impossible. Vérifiez votre connexion Internet, puis réessayez.');
+        }
         return;
       }
+      signedIn = true;
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('role, active')
         .eq('id', authData.user.id)
         .maybeSingle();
       if (profileError) {
-        setError('Impossible de vérifier le profil. Vérifiez votre connexion, puis réessayez.');
-        return;
-      }
-      if (!profile?.active || profile.role !== 'admin') {
         try { await supabase.auth.signOut(); } catch { /* ignore */ }
-        setError('Accès refusé. Cet espace est réservé à un administrateur actif.');
+        if (!mountedRef.current) return;
+        setError('Impossible de vérifier votre profil. Vérifiez votre connexion, puis réessayez.');
         return;
       }
-      router.replace('/accounts');
+      if (!profile?.active) {
+        try { await supabase.auth.signOut(); } catch { /* ignore */ }
+        if (!mountedRef.current) return;
+        setPassword('');
+        setError('Ce compte n’est plus actif. Contactez votre administrateur.');
+        return;
+      }
+      if (!mountedRef.current) return;
+      setPassword('');
+      router.replace('/home');
     } catch {
+      if (signedIn) {
+        try { await supabase.auth.signOut(); } catch { /* ignore */ }
+      }
+      if (!mountedRef.current) return;
       setError('Connexion impossible. Vérifiez votre connexion Internet, puis réessayez.');
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }
 
@@ -80,8 +136,19 @@ export default function SignIn() {
         <ScrollView contentContainerStyle={[styles.page, { paddingHorizontal: horizontalGutter }]} keyboardShouldPersistTaps="handled">
           <View style={styles.content}>
             <Text style={[styles.brand, { color: theme.primary }]}>TaskFlow</Text>
-            <Text accessibilityRole="header" style={[styles.title, { color: theme.ink }]}>Connexion administrateur</Text>
-            <Text style={[styles.help, { color: theme.muted }]}>Connectez-vous pour gérer les comptes de démonstration.</Text>
+            <Text accessibilityRole="header" style={[styles.title, { color: theme.ink }]}>Connexion</Text>
+            <Text style={[styles.help, { color: theme.muted }]}>Connectez-vous pour retrouver votre espace TaskFlow.</Text>
+
+            {showExpiredNotice && (
+              <View
+                accessibilityRole="alert"
+                style={[styles.noticeCard, { backgroundColor: theme.raised, borderColor: theme.warning }]}
+              >
+                <Text style={[styles.noticeText, { color: theme.ink }]}>
+                  Votre session a expiré ou votre accès n’est plus actif. Connectez-vous pour continuer.
+                </Text>
+              </View>
+            )}
 
             <Text style={[styles.label, { color: theme.ink }]}>Adresse e-mail</Text>
             <TextInput
@@ -173,6 +240,8 @@ const styles = StyleSheet.create({
   brand: { fontSize: 18, fontWeight: '700', marginBottom: 12 },
   title: { fontSize: 28, lineHeight: 34, fontWeight: '700' },
   help: { fontSize: 16, lineHeight: 24, marginTop: 8, marginBottom: 24 },
+  noticeCard: { borderWidth: 1, borderRadius: 12, padding: 14, marginBottom: 16 },
+  noticeText: { fontSize: 15, lineHeight: 22, fontWeight: '500' },
   label: { fontSize: 16, fontWeight: '600', marginBottom: 8, marginTop: 12 },
   input: { borderWidth: 1, borderRadius: 12, minHeight: 52, paddingHorizontal: 14, paddingVertical: 10, fontSize: 17 },
   fieldError: { fontSize: 14, lineHeight: 20, marginTop: 6 },
