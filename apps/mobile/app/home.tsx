@@ -221,6 +221,25 @@ export default function Home() {
             <Text style={[styles.statusText, { color: theme.muted }]}>
               Votre session est ouverte et enregistrée sur cet appareil. Vous retrouverez cet écran automatiquement en rouvrant l’application.
             </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Mon profil"
+              disabled={signingOut}
+              onPress={() => router.replace('/profile')}
+              style={({ pressed }) => [
+                styles.secondaryAction,
+                {
+                  marginTop: 16,
+                  backgroundColor: theme.subtle,
+                  borderColor: theme.border,
+                  opacity: pressed || signingOut ? 0.8 : 1,
+                },
+              ]}
+            >
+              <Text style={[styles.secondaryActionText, { color: theme.ink }]}>
+                Mon profil
+              </Text>
+            </Pressable>
           </View>
 
           {profile.role === 'admin' && (
