@@ -3,7 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
 };
 
 function response(body: Record<string, unknown>, status = 200) {
@@ -27,7 +27,9 @@ function generatedPassword(): string {
 
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
-  if (request.method !== 'POST') return response({ code: 'VALIDATION_ERROR' }, 405);
+  if (request.method !== 'GET' && request.method !== 'POST' && request.method !== 'PATCH') {
+    return response({ code: 'VALIDATION_ERROR' }, 405);
+  }
 
   const url = Deno.env.get('SUPABASE_URL');
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
@@ -70,10 +72,72 @@ Deno.serve(async (request) => {
     return response({ code: 'FORBIDDEN' }, 403);
   }
 
+  if (request.method === 'GET') {
+    const { data: accounts, error: listError } = await admin
+      .from('profiles')
+      .select('id, first_name, last_name, role, active')
+      .order('created_at', { ascending: false });
+    if (listError) return response({ code: 'SERVER_ERROR' }, 500);
+    return response({ accounts: accounts ?? [] }, 200);
+  }
+
+  if (request.method === 'PATCH') {
+    let patchBody: unknown;
+    try { patchBody = await request.json(); } catch { return response({ code: 'VALIDATION_ERROR' }, 400); }
+    if (!patchBody || typeof patchBody !== 'object') return response({ code: 'VALIDATION_ERROR' }, 400);
+    const patchInput = patchBody as Record<string, unknown>;
+    const userId = typeof patchInput.userId === 'string' ? patchInput.userId.trim() : '';
+    const nextActive = typeof patchInput.active === 'boolean' ? patchInput.active : null;
+    if (!userId || nextActive === null || (userId === authData.user.id && !nextActive)) {
+      return response({ code: 'VALIDATION_ERROR' }, 400);
+    }
+    const { data: updated, error: updateError } = await admin
+      .from('profiles')
+      .update({
+        active: nextActive,
+        disabled_at: nextActive ? null : new Date().toISOString(),
+      })
+      .eq('id', userId)
+      .select('id, active')
+      .maybeSingle();
+    if (updateError) return response({ code: 'SERVER_ERROR' }, 500);
+    if (!updated) return response({ code: 'NOT_FOUND' }, 404);
+    return response({ id: updated.id, active: updated.active }, 200);
+  }
+
   let body: unknown;
   try { body = await request.json(); } catch { return response({ code: 'VALIDATION_ERROR' }, 400); }
   if (!body || typeof body !== 'object') return response({ code: 'VALIDATION_ERROR' }, 400);
   const input = body as Record<string, unknown>;
+
+  if (input.action === 'list') {
+    const { data: accounts, error: listError } = await admin
+      .from('profiles')
+      .select('id, first_name, last_name, role, active')
+      .order('created_at', { ascending: false });
+    if (listError) return response({ code: 'SERVER_ERROR' }, 500);
+    return response({ accounts: accounts ?? [] }, 200);
+  }
+
+  if (input.action === 'toggle') {
+    const userId = typeof input.userId === 'string' ? input.userId.trim() : '';
+    const nextActive = typeof input.active === 'boolean' ? input.active : null;
+    if (!userId || nextActive === null || (userId === authData.user.id && !nextActive)) {
+      return response({ code: 'VALIDATION_ERROR' }, 400);
+    }
+    const { data: updated, error: updateError } = await admin
+      .from('profiles')
+      .update({
+        active: nextActive,
+        disabled_at: nextActive ? null : new Date().toISOString(),
+      })
+      .eq('id', userId)
+      .select('id, active')
+      .maybeSingle();
+    if (updateError) return response({ code: 'SERVER_ERROR' }, 500);
+    if (!updated) return response({ code: 'NOT_FOUND' }, 404);
+    return response({ id: updated.id, active: updated.active }, 200);
+  }
   const firstName = typeof input.firstName === 'string' ? input.firstName.trim() : '';
   const lastName = typeof input.lastName === 'string' ? input.lastName.trim() : '';
   const email = typeof input.email === 'string' ? input.email.trim().toLowerCase() : '';

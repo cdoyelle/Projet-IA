@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Redirect, type Href, useRouter } from 'expo-router';
 import { useTheme } from '@/src/lib/theme';
 import { supabase } from '@/src/lib/supabase';
-import type { CreateDemoAccountRequest, CreateDemoAccountSuccess, EdgeErrorCode, EdgeErrorResponse } from '@/src/lib/contracts';
+import type { AdminAccountSummary, CreateDemoAccountRequest, CreateDemoAccountSuccess, EdgeErrorCode, EdgeErrorResponse, ListDemoAccountsSuccess, ToggleAccountStatusRequest, ToggleAccountStatusSuccess } from '@/src/lib/contracts';
 
 type FieldErrors = { firstName?: string; lastName?: string; email?: string };
 type TextInputInstance = ComponentRef<typeof TextInput>;
@@ -79,6 +79,11 @@ export default function Accounts() {
   const [messageIsError, setMessageIsError] = useState(false);
   const [password, setPassword] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<AdminAccountSummary[]>([]);
+  const [accountsLoading, setAccountsLoading] = useState(false);
+  const [accountsError, setAccountsError] = useState('');
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const verifyAccess = useCallback(async () => {
     const seq = ++checkSeqRef.current;
@@ -144,6 +149,7 @@ export default function Accounts() {
       }
       if (mountedRef.current && !signingOutRef.current && seq === checkSeqRef.current) {
         hasVerifiedRef.current = true;
+        setCurrentUserId(data.session.user.id);
         setAuthorized(true);
         setChecking(false);
       }
@@ -196,6 +202,71 @@ export default function Accounts() {
       appStateSubscription.remove();
     };
   }, [router, verifyAccess]);
+
+  const loadAccounts = useCallback(async () => {
+    setAccountsLoading(true);
+    setAccountsError('');
+    try {
+      const { data, error, response } = await supabase.functions.invoke<ListDemoAccountsSuccess & Partial<EdgeErrorResponse>>('admin-accounts', {
+        body: { action: 'list' },
+      });
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error || !Array.isArray(data?.accounts)) {
+        const code = data?.code ?? await readFunctionErrorCode(error, response);
+        if (code === 'FORBIDDEN' || code === 'AUTH_REQUIRED') {
+          await verifyAccess();
+          return;
+        }
+        setAccountsError('Impossible de charger la liste des comptes.');
+        return;
+      }
+      setAccounts(data.accounts);
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setAccountsError('Impossible de charger la liste des comptes.');
+    } finally {
+      if (mountedRef.current) setAccountsLoading(false);
+    }
+  }, [verifyAccess]);
+
+  useEffect(() => {
+    if (authorized) {
+      loadAccounts();
+    }
+  }, [authorized, loadAccounts]);
+
+  async function toggleAccountStatus(account: AdminAccountSummary) {
+    if (togglingId || signingOut || account.id === currentUserId) return;
+    setTogglingId(account.id);
+    setAccountsError('');
+    try {
+      const payload: ToggleAccountStatusRequest = {
+        userId: account.id,
+        active: !account.active,
+      };
+      const { data, error, response } = await supabase.functions.invoke<ToggleAccountStatusSuccess & Partial<EdgeErrorResponse>>('admin-accounts', {
+        body: { action: 'toggle', ...payload },
+      });
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error || typeof data?.active !== 'boolean') {
+        const code = data?.code ?? await readFunctionErrorCode(error, response);
+        if (code === 'FORBIDDEN' || code === 'AUTH_REQUIRED') {
+          await verifyAccess();
+          return;
+        }
+        setAccountsError('Impossible de modifier le statut du compte.');
+        return;
+      }
+      setAccounts((prev) =>
+        prev.map((item) => (item.id === account.id ? { ...item, active: data.active } : item))
+      );
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setAccountsError('Impossible de modifier le statut du compte.');
+    } finally {
+      if (mountedRef.current) setTogglingId(null);
+    }
+  }
 
   async function createAccount() {
     if (loading || signingOut) return;
@@ -272,6 +343,7 @@ export default function Accounts() {
       setLastName('');
       setEmail('');
       setFieldErrors({});
+      loadAccounts();
     } catch {
       if (!mountedRef.current || signingOutRef.current) return;
       setMessage('Impossible de créer le compte. Vérifiez votre connexion, puis réessayez.');
@@ -491,6 +563,55 @@ export default function Accounts() {
                 </View>
               </View>
             )}
+
+            <View style={styles.listSection}>
+              <Text accessibilityRole="header" style={[styles.listTitle, { color: theme.ink }]}>Liste des comptes</Text>
+              {accountsLoading && (
+                <ActivityIndicator accessibilityLabel="Chargement des comptes" color={theme.primary} style={{ marginTop: 12 }} />
+              )}
+              {!!accountsError && (
+                <Text accessibilityRole="alert" style={[styles.message, { color: theme.danger }]}>{accountsError}</Text>
+              )}
+              {accounts.map((account) => {
+                const isSelf = account.id === currentUserId;
+                const isBusy = togglingId === account.id;
+                return (
+                  <View
+                    key={account.id}
+                    style={[styles.accountCard, { backgroundColor: theme.raised, borderColor: theme.border }]}
+                  >
+                    <View style={styles.accountInfo}>
+                      <Text style={[styles.accountName, { color: theme.ink }]}>
+                        {account.first_name} {account.last_name}
+                      </Text>
+                      <Text style={[styles.accountMeta, { color: theme.muted }]}>
+                        {account.role === 'admin' ? 'Administrateur' : account.role === 'owner' ? 'Responsable' : 'Membre'} · {account.active ? 'Actif' : 'Désactivé'}
+                      </Text>
+                    </View>
+                    {!isSelf && (
+                      <TouchableOpacity
+                        accessibilityRole="button"
+                        accessibilityLabel={account.active ? `Désactiver ${account.first_name}` : `Réactiver ${account.first_name}`}
+                        disabled={isBusy || signingOut}
+                        onPress={() => toggleAccountStatus(account)}
+                        style={[
+                          styles.toggleButton,
+                          {
+                            backgroundColor: theme.subtle,
+                            borderColor: account.active ? theme.danger : theme.primary,
+                            opacity: isBusy ? 0.6 : 1,
+                          },
+                        ]}
+                      >
+                        <Text style={{ color: account.active ? theme.danger : theme.primary, fontWeight: '600', fontSize: 14 }}>
+                          {account.active ? 'Désactiver' : 'Réactiver'}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                );
+              })}
+            </View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -523,4 +644,11 @@ const styles = StyleSheet.create({
   footnote: { fontSize: 14, lineHeight: 20 },
   secretActions: { gap: 10, marginTop: 16 },
   secondaryButton: { minHeight: 48, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  listSection: { marginTop: 32, gap: 12 },
+  listTitle: { fontSize: 20, lineHeight: 26, fontWeight: '700' },
+  accountCard: { borderWidth: 1, borderRadius: 14, padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  accountInfo: { flex: 1 },
+  accountName: { fontSize: 16, fontWeight: '700' },
+  accountMeta: { fontSize: 14, marginTop: 2 },
+  toggleButton: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
 });

@@ -21,6 +21,28 @@ export interface CreateDemoAccountSuccess {
   password: string;
 }
 
+export interface AdminAccountSummary {
+  id: string;
+  first_name: string;
+  last_name: string;
+  role: 'admin' | 'owner' | 'member';
+  active: boolean;
+}
+
+export interface ListDemoAccountsSuccess {
+  accounts: AdminAccountSummary[];
+}
+
+export interface ToggleAccountStatusRequest {
+  userId: string;
+  active: boolean;
+}
+
+export interface ToggleAccountStatusSuccess {
+  id: string;
+  active: boolean;
+}
+
 export interface EdgeErrorResponse {
   code: EdgeErrorCode;
 }
