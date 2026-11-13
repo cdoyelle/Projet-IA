@@ -42,6 +42,7 @@ export default function SignIn() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [dismissedNotice, setDismissedNotice] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -225,6 +226,39 @@ export default function SignIn() {
             >
               {loading ? <ActivityIndicator color={theme.onPrimary} /> : <Text style={[styles.buttonText, { color: theme.onPrimary }]}>Se connecter</Text>}
             </Pressable>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={showHelp ? 'Masquer l’aide de connexion' : 'Mot de passe oublié ?'}
+              disabled={loading}
+              onPress={() => setShowHelp((prev) => !prev)}
+              style={({ pressed }) => [
+                styles.helpToggle,
+                {
+                  backgroundColor: theme.subtle,
+                  borderColor: theme.border,
+                  opacity: pressed || loading ? 0.8 : 1,
+                },
+              ]}
+            >
+              <Text style={[styles.helpToggleText, { color: theme.ink }]}>
+                {showHelp ? 'Masquer l’aide' : 'Mot de passe oublié ?'}
+              </Text>
+            </Pressable>
+
+            {showHelp && (
+              <View
+                accessibilityLiveRegion="polite"
+                style={[styles.helpCard, { backgroundColor: theme.raised, borderColor: theme.border }]}
+              >
+                <Text accessibilityRole="header" style={[styles.helpCardTitle, { color: theme.ink }]}>
+                  Retrouver votre accès
+                </Text>
+                <Text style={[styles.helpCardBody, { color: theme.muted }]}>
+                  Aucun courriel de réinitialisation n’est envoyé dans cette application. Contactez votre administrateur afin qu’il génère un nouveau mot de passe et vous le transmette en dehors de l’application.
+                </Text>
+              </View>
+            )}
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -248,4 +282,9 @@ const styles = StyleSheet.create({
   error: { fontSize: 15, lineHeight: 22, marginTop: 12 },
   button: { minHeight: 52, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginTop: 24 },
   buttonText: { fontWeight: '700', fontSize: 16 },
+  helpToggle: { minHeight: 48, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center', marginTop: 12 },
+  helpToggleText: { fontWeight: '600', fontSize: 15 },
+  helpCard: { borderWidth: 1, borderRadius: 14, padding: 16, marginTop: 14 },
+  helpCardTitle: { fontSize: 16, fontWeight: '700', marginBottom: 6 },
+  helpCardBody: { fontSize: 15, lineHeight: 22 },
 });
