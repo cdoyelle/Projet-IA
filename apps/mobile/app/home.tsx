@@ -223,13 +223,32 @@ export default function Home() {
             </Text>
             <Pressable
               accessibilityRole="button"
+              accessibilityLabel="Projets"
+              disabled={signingOut}
+              onPress={() => router.replace('/projects')}
+              style={({ pressed }) => [
+                styles.secondaryAction,
+                {
+                  marginTop: 16,
+                  backgroundColor: theme.subtle,
+                  borderColor: theme.border,
+                  opacity: pressed || signingOut ? 0.8 : 1,
+                },
+              ]}
+            >
+              <Text style={[styles.secondaryActionText, { color: theme.ink }]}>
+                Projets
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
               accessibilityLabel="Mon profil"
               disabled={signingOut}
               onPress={() => router.replace('/profile')}
               style={({ pressed }) => [
                 styles.secondaryAction,
                 {
-                  marginTop: 16,
+                  marginTop: 10,
                   backgroundColor: theme.subtle,
                   borderColor: theme.border,
                   opacity: pressed || signingOut ? 0.8 : 1,
