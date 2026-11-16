@@ -15,6 +15,7 @@ type ProjectRow = {
   status: 'active' | 'closed';
   start_date: string;
   due_date: string | null;
+  closed_at: string | null;
   owner_id: string;
 };
 
@@ -139,6 +140,7 @@ export default function Projects() {
   const [memberSearch, setMemberSearch] = useState('');
   const [memberBusyId, setMemberBusyId] = useState<string | null>(null);
   const [memberError, setMemberError] = useState('');
+  const [statusBusy, setStatusBusy] = useState(false);
 
   const verifyAndLoad = useCallback(async () => {
     const seq = ++checkSeqRef.current;
@@ -180,7 +182,7 @@ export default function Projects() {
       const validRole: UserRole = profile.role === 'admin' || profile.role === 'owner' ? profile.role : 'member';
       const { data: rows, error: projectsError } = await supabase
         .from('projects')
-        .select('id, name, description, status, start_date, due_date, owner_id')
+        .select('id, name, description, status, start_date, due_date, closed_at, owner_id')
         .order('created_at', { ascending: false });
 
       if (!mountedRef.current || signingOutRef.current || seq !== checkSeqRef.current) return;
@@ -300,7 +302,7 @@ export default function Projects() {
           due_date: dueIso,
           owner_id: userId,
         })
-        .select('id, name, description, status, start_date, due_date, owner_id')
+        .select('id, name, description, status, start_date, due_date, closed_at, owner_id')
         .single();
 
       if (!mountedRef.current || signingOutRef.current) return;
@@ -383,7 +385,7 @@ export default function Projects() {
           due_date: dueIso,
         })
         .eq('id', project.id)
-        .select('id, name, description, status, start_date, due_date, owner_id')
+        .select('id, name, description, status, start_date, due_date, closed_at, owner_id')
         .single();
 
       if (!mountedRef.current || signingOutRef.current) return;
@@ -495,6 +497,55 @@ export default function Projects() {
       setMemberError('Impossible de retirer ce membre.');
     } finally {
       if (mountedRef.current) setMemberBusyId(null);
+    }
+  }
+
+  async function closeProject(project: ProjectRow) {
+    if (statusBusy || signingOut) return;
+    setStatusBusy(true);
+    setEditError('');
+    setEditMessage('');
+    try {
+      const { data: closedAt, error } = await supabase.rpc('close_project', { p_project_id: project.id });
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error) {
+        setEditError('Impossible de clôturer ce projet.');
+        return;
+      }
+      setProjects((prev) =>
+        prev.map((p) => (p.id === project.id ? { ...p, status: 'closed', closed_at: String(closedAt) } : p))
+      );
+      setEditing(false);
+      setEditMessage('Le projet a été clôturé.');
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setEditError('Impossible de clôturer ce projet.');
+    } finally {
+      if (mountedRef.current) setStatusBusy(false);
+    }
+  }
+
+  async function reopenProject(project: ProjectRow) {
+    if (statusBusy || signingOut) return;
+    setStatusBusy(true);
+    setEditError('');
+    setEditMessage('');
+    try {
+      const { error } = await supabase.rpc('reopen_project', { p_project_id: project.id });
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error) {
+        setEditError('Impossible de rouvrir ce projet.');
+        return;
+      }
+      setProjects((prev) =>
+        prev.map((p) => (p.id === project.id ? { ...p, status: 'active' } : p))
+      );
+      setEditMessage('Le projet a été rouvert.');
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setEditError('Impossible de rouvrir ce projet.');
+    } finally {
+      if (mountedRef.current) setStatusBusy(false);
     }
   }
 
@@ -780,6 +831,12 @@ export default function Projects() {
                     Début : {formatDateFr(selectedProject.start_date)}
                     {selectedProject.due_date ? ` · Échéance : ${formatDateFr(selectedProject.due_date)}` : ''}
                   </Text>
+                  {!!selectedProject.closed_at && (
+                    <Text style={[styles.detailMeta, { color: theme.muted }]}>
+                      {selectedProject.status === 'closed' ? 'Clôturé le : ' : 'Dernière clôture : '}
+                      {formatDateFr(selectedProject.closed_at.slice(0, 10))}
+                    </Text>
+                  )}
                   <Text style={[styles.detailBody, { color: theme.ink }]}>
                     {selectedProject.description || 'Aucune description renseignée.'}
                   </Text>
@@ -795,13 +852,37 @@ export default function Projects() {
                   )}
 
                   {selectedProject.status === 'active' && (role === 'admin' || selectedProject.owner_id === userId) && !editing && (
+                    <View style={styles.formActions}>
+                      <TouchableOpacity
+                        accessibilityRole="button"
+                        accessibilityLabel="Modifier le projet"
+                        disabled={statusBusy}
+                        onPress={() => startEditing(selectedProject)}
+                        style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                      >
+                        <Text style={[styles.calendarBtnText, { color: theme.ink }]}>Modifier le projet</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        accessibilityRole="button"
+                        accessibilityLabel="Clôturer le projet"
+                        disabled={statusBusy}
+                        onPress={() => closeProject(selectedProject)}
+                        style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.danger, opacity: statusBusy ? 0.6 : 1 }]}
+                      >
+                        <Text style={[styles.calendarBtnText, { color: theme.danger }]}>Clôturer le projet</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+
+                  {selectedProject.status === 'closed' && (role === 'admin' || selectedProject.owner_id === userId) && (
                     <TouchableOpacity
                       accessibilityRole="button"
-                      accessibilityLabel="Modifier le projet"
-                      onPress={() => startEditing(selectedProject)}
-                      style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border, alignSelf: 'flex-start', marginTop: 8 }]}
+                      accessibilityLabel="Rouvrir le projet"
+                      disabled={statusBusy}
+                      onPress={() => reopenProject(selectedProject)}
+                      style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.primary, alignSelf: 'flex-start', marginTop: 8, opacity: statusBusy ? 0.6 : 1 }]}
                     >
-                      <Text style={[styles.calendarBtnText, { color: theme.ink }]}>Modifier le projet</Text>
+                      <Text style={[styles.calendarBtnText, { color: theme.primary }]}>Rouvrir le projet</Text>
                     </TouchableOpacity>
                   )}
 
