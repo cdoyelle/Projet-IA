@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { type ComponentRef, useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, AppState, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Redirect, type Href, useRouter } from 'expo-router';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { supabase } from '@/src/lib/supabase';
 import { useTheme } from '@/src/lib/theme';
 
@@ -15,6 +16,47 @@ type ProjectRow = {
   start_date: string;
   due_date: string | null;
 };
+
+type ProjectFormErrors = { name?: string; startDate?: string; dueDate?: string };
+type TextInputInstance = ComponentRef<typeof TextInput>;
+
+function todayFrDate(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${d}/${m}/${y}`;
+}
+
+function parseFrDateToIso(value: string): string | null {
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value);
+  if (!match) return null;
+  const [, d, m, y] = match;
+  const iso = `${y}-${m}-${d}`;
+  const parsed = new Date(`${iso}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== iso) return null;
+  return iso;
+}
+
+function formatDateInput(raw: string): string {
+  const digits = raw.replace(/\D/g, '').slice(0, 8);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
+
+function dateToFrString(date: Date): string {
+  const d = String(date.getDate()).padStart(2, '0');
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const y = date.getFullYear();
+  return `${d}/${m}/${y}`;
+}
+
+function frStringToDate(value: string): Date {
+  const iso = parseFrDateToIso(value);
+  if (!iso) return new Date();
+  return new Date(`${iso}T00:00:00`);
+}
 
 function formatDateFr(isoDate: string | null): string {
   if (!isoDate) return 'Non définie';
@@ -47,9 +89,24 @@ export default function Projects() {
   const [redirectHref, setRedirectHref] = useState<Href>('/sign-in?reason=expired');
   const [signingOut, setSigningOut] = useState(false);
   const [role, setRole] = useState<UserRole>('member');
+  const [userId, setUserId] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState('');
+
+  const nameRef = useRef<TextInputInstance>(null);
+  const startDateRef = useRef<TextInputInstance>(null);
+  const dueDateRef = useRef<TextInputInstance>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [startDate, setStartDate] = useState(todayFrDate);
+  const [dueDate, setDueDate] = useState('');
+  const [activePicker, setActivePicker] = useState<'start' | 'due' | null>(null);
+  const [formErrors, setFormErrors] = useState<ProjectFormErrors>({});
+  const [creating, setCreating] = useState(false);
+  const [createMessage, setCreateMessage] = useState('');
+  const [createError, setCreateError] = useState('');
 
   const verifyAndLoad = useCallback(async () => {
     const seq = ++checkSeqRef.current;
@@ -97,6 +154,7 @@ export default function Projects() {
       if (!mountedRef.current || signingOutRef.current || seq !== checkSeqRef.current) return;
 
       hasVerifiedRef.current = true;
+      setUserId(data.session.user.id);
       setRole(validRole);
       setAuthorized(true);
       setChecking(false);
@@ -155,6 +213,91 @@ export default function Projects() {
     };
   }, [router, verifyAndLoad]);
 
+  function openCreateForm() {
+    setStartDate(todayFrDate());
+    setFormErrors({});
+    setCreateError('');
+    setCreateMessage('');
+    setShowForm(true);
+  }
+
+  async function createProject() {
+    if (creating || signingOut || !userId) return;
+    const errors: ProjectFormErrors = {};
+    const trimmedName = name.trim();
+    const trimmedStart = startDate.trim();
+    const trimmedDue = dueDate.trim();
+
+    if (!trimmedName) {
+      errors.name = 'Saisissez le nom du projet.';
+    } else if (trimmedName.length > 120) {
+      errors.name = 'Le nom ne doit pas dépasser 120 caractères.';
+    }
+    const startIso = parseFrDateToIso(trimmedStart);
+    if (!startIso) {
+      errors.startDate = 'Saisissez une date valide (JJ/MM/AAAA).';
+    }
+    let dueIso: string | null = null;
+    if (trimmedDue) {
+      dueIso = parseFrDateToIso(trimmedDue);
+      if (!dueIso) {
+        errors.dueDate = 'Saisissez une date valide (JJ/MM/AAAA).';
+      } else if (startIso && dueIso < startIso) {
+        errors.dueDate = 'L’échéance doit être postérieure ou égale à la date de début.';
+      }
+    }
+
+    setFormErrors(errors);
+    setCreateError('');
+    if (Object.keys(errors).length > 0) {
+      if (errors.name) nameRef.current?.focus();
+      else if (errors.startDate) startDateRef.current?.focus();
+      else if (errors.dueDate) dueDateRef.current?.focus();
+      return;
+    }
+
+    setCreating(true);
+    try {
+      const { data: created, error } = await supabase
+        .from('projects')
+        .insert({
+          name: trimmedName,
+          description: description.trim() || null,
+          status: 'active',
+          start_date: startIso!,
+          due_date: dueIso,
+          owner_id: userId,
+        })
+        .select('id, name, description, status, start_date, due_date')
+        .single();
+
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error || !created) {
+        if (error?.code === '42501') {
+          setCreateError('Action non autorisée. Vérifiez que votre rôle ou les droits Supabase sont bien à jour.');
+        } else {
+          setCreateError('Impossible de créer le projet. Vérifiez votre connexion, puis réessayez.');
+        }
+        return;
+      }
+
+      const row = created as ProjectRow;
+      setProjects((prev) => [row, ...prev]);
+      setSelectedId(row.id);
+      setName('');
+      setDescription('');
+      setDueDate('');
+      setFormErrors({});
+      setShowForm(false);
+      setCreateMessage('Le projet a été créé avec le statut Actif.');
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setCreateError('Impossible de créer le projet. Vérifiez votre connexion, puis réessayez.');
+    } finally {
+      if (mountedRef.current) setCreating(false);
+    }
+  }
+
   async function signOut() {
     if (signingOut) return;
     signingOutRef.current = true;
@@ -196,6 +339,17 @@ export default function Projects() {
               <Text accessibilityRole="header" style={[styles.title, { color: theme.ink }]}>Projets</Text>
             </View>
             <View style={styles.headerActions}>
+              {(role === 'admin' || role === 'owner') && (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Nouveau projet"
+                  disabled={signingOut}
+                  onPress={openCreateForm}
+                  style={[styles.headerBtn, { backgroundColor: theme.primary, borderColor: theme.primary }]}
+                >
+                  <Text style={[styles.headerBtnText, { color: theme.onPrimary }]}>Nouveau projet</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity
                 accessibilityRole="button"
                 accessibilityLabel="Retour à l’accueil"
@@ -216,6 +370,147 @@ export default function Projects() {
               </TouchableOpacity>
             </View>
           </View>
+
+          {!!createMessage && (
+            <Text accessibilityRole="alert" style={[styles.successText, { color: theme.success }]}>{createMessage}</Text>
+          )}
+
+          {showForm && (
+            <View style={[styles.formCard, { backgroundColor: theme.raised, borderColor: theme.border }]}>
+              <Text accessibilityRole="header" style={[styles.formTitle, { color: theme.ink }]}>Nouveau projet</Text>
+
+              <Text style={[styles.label, { color: theme.ink }]}>Nom du projet</Text>
+              <TextInput
+                ref={nameRef}
+                accessibilityLabel="Nom du projet"
+                editable={!creating}
+                value={name}
+                onChangeText={(val) => {
+                  setName(val);
+                  if (formErrors.name) setFormErrors((prev) => ({ ...prev, name: undefined }));
+                }}
+                style={[styles.input, { color: theme.ink, backgroundColor: theme.surface, borderColor: formErrors.name ? theme.danger : theme.border }]}
+              />
+              {!!formErrors.name && <Text accessibilityRole="alert" style={[styles.fieldError, { color: theme.danger }]}>{formErrors.name}</Text>}
+
+              <Text style={[styles.label, { color: theme.ink }]}>Description (facultatif)</Text>
+              <TextInput
+                accessibilityLabel="Description"
+                editable={!creating}
+                multiline
+                value={description}
+                onChangeText={setDescription}
+                style={[styles.input, styles.textArea, { color: theme.ink, backgroundColor: theme.surface, borderColor: theme.border }]}
+              />
+
+              <Text style={[styles.label, { color: theme.ink }]}>Date de début (JJ/MM/AAAA)</Text>
+              <View style={styles.dateRow}>
+                <TextInput
+                  ref={startDateRef}
+                  accessibilityLabel="Date de début"
+                  editable={!creating}
+                  keyboardType="number-pad"
+                  maxLength={10}
+                  value={startDate}
+                  onChangeText={(val) => {
+                    setStartDate(formatDateInput(val));
+                    if (formErrors.startDate) setFormErrors((prev) => ({ ...prev, startDate: undefined }));
+                  }}
+                  style={[styles.input, styles.dateInput, { color: theme.ink, backgroundColor: theme.surface, borderColor: formErrors.startDate ? theme.danger : theme.border }]}
+                />
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Choisir la date de début dans le calendrier"
+                  disabled={creating}
+                  onPress={() => setActivePicker((prev) => (prev === 'start' ? null : 'start'))}
+                  style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                >
+                  <Text style={[styles.calendarBtnText, { color: theme.ink }]}>Calendrier</Text>
+                </TouchableOpacity>
+              </View>
+              {activePicker === 'start' && (
+                <DateTimePicker
+                  value={frStringToDate(startDate)}
+                  mode="date"
+                  display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                  onChange={(_event, selected) => {
+                    if (Platform.OS !== 'ios') setActivePicker(null);
+                    if (selected) {
+                      setStartDate(dateToFrString(selected));
+                      if (formErrors.startDate) setFormErrors((prev) => ({ ...prev, startDate: undefined }));
+                    }
+                  }}
+                />
+              )}
+              {!!formErrors.startDate && <Text accessibilityRole="alert" style={[styles.fieldError, { color: theme.danger }]}>{formErrors.startDate}</Text>}
+
+              <Text style={[styles.label, { color: theme.ink }]}>Date d’échéance (facultatif, JJ/MM/AAAA)</Text>
+              <View style={styles.dateRow}>
+                <TextInput
+                  ref={dueDateRef}
+                  accessibilityLabel="Date d’échéance"
+                  editable={!creating}
+                  keyboardType="number-pad"
+                  maxLength={10}
+                  placeholder="JJ/MM/AAAA"
+                  placeholderTextColor={theme.muted}
+                  value={dueDate}
+                  onChangeText={(val) => {
+                    setDueDate(formatDateInput(val));
+                    if (formErrors.dueDate) setFormErrors((prev) => ({ ...prev, dueDate: undefined }));
+                  }}
+                  style={[styles.input, styles.dateInput, { color: theme.ink, backgroundColor: theme.surface, borderColor: formErrors.dueDate ? theme.danger : theme.border }]}
+                />
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Choisir la date d’échéance dans le calendrier"
+                  disabled={creating}
+                  onPress={() => setActivePicker((prev) => (prev === 'due' ? null : 'due'))}
+                  style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                >
+                  <Text style={[styles.calendarBtnText, { color: theme.ink }]}>Calendrier</Text>
+                </TouchableOpacity>
+              </View>
+              {activePicker === 'due' && (
+                <DateTimePicker
+                  value={frStringToDate(dueDate || startDate)}
+                  mode="date"
+                  display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                  onChange={(_event, selected) => {
+                    if (Platform.OS !== 'ios') setActivePicker(null);
+                    if (selected) {
+                      setDueDate(dateToFrString(selected));
+                      if (formErrors.dueDate) setFormErrors((prev) => ({ ...prev, dueDate: undefined }));
+                    }
+                  }}
+                />
+              )}
+              {!!formErrors.dueDate && <Text accessibilityRole="alert" style={[styles.fieldError, { color: theme.danger }]}>{formErrors.dueDate}</Text>}
+
+              {!!createError && <Text accessibilityRole="alert" style={[styles.fieldError, { color: theme.danger }]}>{createError}</Text>}
+
+              <View style={styles.formActions}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Créer le projet"
+                  disabled={creating}
+                  onPress={createProject}
+                  style={[styles.primaryBtn, { backgroundColor: theme.primary, opacity: creating ? 0.7 : 1 }]}
+                >
+                  {creating ? <ActivityIndicator color={theme.onPrimary} /> : <Text style={{ color: theme.onPrimary, fontWeight: '700', fontSize: 16 }}>Créer le projet</Text>}
+                </Pressable>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Annuler"
+                  disabled={creating}
+                  onPress={() => setShowForm(false)}
+                  style={[styles.headerBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                >
+                  <Text style={[styles.headerBtnText, { color: theme.ink }]}>Annuler</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
 
           {!!loadError && (
             <Text accessibilityRole="alert" style={[styles.errorText, { color: theme.danger }]}>{loadError}</Text>
@@ -324,4 +619,17 @@ const styles = StyleSheet.create({
   detailTitle: { fontSize: 22, fontWeight: '700' },
   detailMeta: { fontSize: 14, lineHeight: 20 },
   detailBody: { fontSize: 16, lineHeight: 24, marginTop: 6 },
+  successText: { fontSize: 16, lineHeight: 24, fontWeight: '600' },
+  formCard: { borderWidth: 1, borderRadius: 18, padding: 18, gap: 6 },
+  formTitle: { fontSize: 20, fontWeight: '700', marginBottom: 4 },
+  label: { fontSize: 15, fontWeight: '600', marginTop: 10, marginBottom: 4 },
+  input: { minHeight: 48, borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 10, fontSize: 16 },
+  dateRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  dateInput: { flex: 1 },
+  calendarBtn: { minHeight: 48, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  calendarBtnText: { fontWeight: '600', fontSize: 15 },
+  textArea: { minHeight: 80, textAlignVertical: 'top' },
+  fieldError: { fontSize: 14, lineHeight: 20, marginTop: 4 },
+  formActions: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 16, flexWrap: 'wrap' },
+  primaryBtn: { minHeight: 48, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
 });
