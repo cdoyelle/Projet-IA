@@ -15,6 +15,7 @@ type ProjectRow = {
   status: 'active' | 'closed';
   start_date: string;
   due_date: string | null;
+  owner_id: string;
 };
 
 type ProjectFormErrors = { name?: string; startDate?: string; dueDate?: string };
@@ -108,6 +109,17 @@ export default function Projects() {
   const [createMessage, setCreateMessage] = useState('');
   const [createError, setCreateError] = useState('');
 
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editStartDate, setEditStartDate] = useState('');
+  const [editDueDate, setEditDueDate] = useState('');
+  const [editPicker, setEditPicker] = useState<'start' | 'due' | null>(null);
+  const [editErrors, setEditErrors] = useState<ProjectFormErrors>({});
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editMessage, setEditMessage] = useState('');
+  const [editError, setEditError] = useState('');
+
   const verifyAndLoad = useCallback(async () => {
     const seq = ++checkSeqRef.current;
     try {
@@ -148,7 +160,7 @@ export default function Projects() {
       const validRole: UserRole = profile.role === 'admin' || profile.role === 'owner' ? profile.role : 'member';
       const { data: rows, error: projectsError } = await supabase
         .from('projects')
-        .select('id, name, description, status, start_date, due_date')
+        .select('id, name, description, status, start_date, due_date, owner_id')
         .order('created_at', { ascending: false });
 
       if (!mountedRef.current || signingOutRef.current || seq !== checkSeqRef.current) return;
@@ -268,7 +280,7 @@ export default function Projects() {
           due_date: dueIso,
           owner_id: userId,
         })
-        .select('id, name, description, status, start_date, due_date')
+        .select('id, name, description, status, start_date, due_date, owner_id')
         .single();
 
       if (!mountedRef.current || signingOutRef.current) return;
@@ -295,6 +307,84 @@ export default function Projects() {
       setCreateError('Impossible de créer le projet. Vérifiez votre connexion, puis réessayez.');
     } finally {
       if (mountedRef.current) setCreating(false);
+    }
+  }
+
+  function startEditing(project: ProjectRow) {
+    setEditName(project.name);
+    setEditDescription(project.description ?? '');
+    setEditStartDate(dateToFrString(new Date(`${project.start_date}T00:00:00`)));
+    setEditDueDate(project.due_date ? dateToFrString(new Date(`${project.due_date}T00:00:00`)) : '');
+    setEditPicker(null);
+    setEditErrors({});
+    setEditError('');
+    setEditMessage('');
+    setEditing(true);
+  }
+
+  async function saveProjectEdit(project: ProjectRow) {
+    if (savingEdit || signingOut) return;
+    const errors: ProjectFormErrors = {};
+    const trimmedName = editName.trim();
+    const trimmedStart = editStartDate.trim();
+    const trimmedDue = editDueDate.trim();
+
+    if (!trimmedName) {
+      errors.name = 'Saisissez le nom du projet.';
+    } else if (trimmedName.length > 120) {
+      errors.name = 'Le nom ne doit pas dépasser 120 caractères.';
+    }
+    const startIso = parseFrDateToIso(trimmedStart);
+    if (!startIso) {
+      errors.startDate = 'Saisissez une date valide (JJ/MM/AAAA).';
+    }
+    let dueIso: string | null = null;
+    if (trimmedDue) {
+      dueIso = parseFrDateToIso(trimmedDue);
+      if (!dueIso) {
+        errors.dueDate = 'Saisissez une date valide (JJ/MM/AAAA).';
+      } else if (startIso && dueIso < startIso) {
+        errors.dueDate = 'L’échéance doit être postérieure ou égale à la date de début.';
+      }
+    }
+
+    setEditErrors(errors);
+    setEditError('');
+    if (Object.keys(errors).length > 0) return;
+
+    setSavingEdit(true);
+    try {
+      const { data: updated, error } = await supabase
+        .from('projects')
+        .update({
+          name: trimmedName,
+          description: editDescription.trim() || null,
+          start_date: startIso!,
+          due_date: dueIso,
+        })
+        .eq('id', project.id)
+        .select('id, name, description, status, start_date, due_date, owner_id')
+        .single();
+
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error || !updated) {
+        if (error?.code === '42501') {
+          setEditError('Modification non autorisée pour ce projet.');
+        } else {
+          setEditError('Impossible d’enregistrer les modifications. Vérifiez votre connexion, puis réessayez.');
+        }
+        return;
+      }
+
+      const row = updated as ProjectRow;
+      setProjects((prev) => prev.map((p) => (p.id === row.id ? row : p)));
+      setEditing(false);
+      setEditMessage('Les modifications du projet ont été enregistrées.');
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setEditError('Impossible d’enregistrer les modifications. Vérifiez votre connexion, puis réessayez.');
+    } finally {
+      if (mountedRef.current) setSavingEdit(false);
     }
   }
 
@@ -529,13 +619,18 @@ export default function Projects() {
             <View style={[styles.splitLayout, isTablet && styles.splitLayoutTablet]}>
               <View style={[styles.listColumn, isTablet && styles.listColumnTablet]}>
                 {projects.map((project) => {
-                  const isSelected = isTablet && project.id === selectedId;
+                  const isSelected = project.id === selectedId;
                   return (
                     <Pressable
                       key={project.id}
                       accessibilityRole="button"
                       accessibilityLabel={`Projet ${project.name}`}
-                      onPress={() => setSelectedId(project.id)}
+                      onPress={() => {
+                        setSelectedId(project.id);
+                        setEditing(false);
+                        setEditMessage('');
+                        setEditError('');
+                      }}
                       style={[
                         styles.projectCard,
                         {
@@ -563,8 +658,8 @@ export default function Projects() {
                 })}
               </View>
 
-              {isTablet && selectedProject && (
-                <View style={[styles.detailColumn, { backgroundColor: theme.raised, borderColor: theme.border }]}>
+              {selectedProject && (
+                <View style={[styles.detailColumn, !isTablet && styles.detailColumnPhone, { backgroundColor: theme.raised, borderColor: theme.border }]}>
                   <Text accessibilityRole="header" style={[styles.detailTitle, { color: theme.ink }]}>
                     {selectedProject.name}
                   </Text>
@@ -578,6 +673,155 @@ export default function Projects() {
                   <Text style={[styles.detailBody, { color: theme.ink }]}>
                     {selectedProject.description || 'Aucune description renseignée.'}
                   </Text>
+
+                  {selectedProject.status === 'closed' && (
+                    <Text style={[styles.readOnlyNote, { color: theme.muted }]}>
+                      Ce projet est clôturé : ses informations et tâches sont en lecture seule.
+                    </Text>
+                  )}
+
+                  {!!editMessage && (
+                    <Text accessibilityRole="alert" style={[styles.successText, { color: theme.success }]}>{editMessage}</Text>
+                  )}
+
+                  {selectedProject.status === 'active' && (role === 'admin' || selectedProject.owner_id === userId) && !editing && (
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel="Modifier le projet"
+                      onPress={() => startEditing(selectedProject)}
+                      style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border, alignSelf: 'flex-start', marginTop: 8 }]}
+                    >
+                      <Text style={[styles.calendarBtnText, { color: theme.ink }]}>Modifier le projet</Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {editing && (
+                    <View style={styles.editSection}>
+                      <Text style={[styles.label, { color: theme.ink }]}>Nom du projet</Text>
+                      <TextInput
+                        accessibilityLabel="Modifier le nom du projet"
+                        editable={!savingEdit}
+                        value={editName}
+                        onChangeText={(val) => {
+                          setEditName(val);
+                          if (editErrors.name) setEditErrors((prev) => ({ ...prev, name: undefined }));
+                        }}
+                        style={[styles.input, { color: theme.ink, backgroundColor: theme.surface, borderColor: editErrors.name ? theme.danger : theme.border }]}
+                      />
+                      {!!editErrors.name && <Text accessibilityRole="alert" style={[styles.fieldError, { color: theme.danger }]}>{editErrors.name}</Text>}
+
+                      <Text style={[styles.label, { color: theme.ink }]}>Description (facultatif)</Text>
+                      <TextInput
+                        accessibilityLabel="Modifier la description"
+                        editable={!savingEdit}
+                        multiline
+                        value={editDescription}
+                        onChangeText={setEditDescription}
+                        style={[styles.input, styles.textArea, { color: theme.ink, backgroundColor: theme.surface, borderColor: theme.border }]}
+                      />
+
+                      <Text style={[styles.label, { color: theme.ink }]}>Date de début (JJ/MM/AAAA)</Text>
+                      <View style={styles.dateRow}>
+                        <TextInput
+                          accessibilityLabel="Modifier la date de début"
+                          editable={!savingEdit}
+                          keyboardType="number-pad"
+                          maxLength={10}
+                          value={editStartDate}
+                          onChangeText={(val) => {
+                            setEditStartDate(formatDateInput(val));
+                            if (editErrors.startDate) setEditErrors((prev) => ({ ...prev, startDate: undefined }));
+                          }}
+                          style={[styles.input, styles.dateInput, { color: theme.ink, backgroundColor: theme.surface, borderColor: editErrors.startDate ? theme.danger : theme.border }]}
+                        />
+                        <TouchableOpacity
+                          accessibilityRole="button"
+                          onPress={() => setEditPicker((prev) => (prev === 'start' ? null : 'start'))}
+                          style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                        >
+                          <Text style={[styles.calendarBtnText, { color: theme.ink }]}>Calendrier</Text>
+                        </TouchableOpacity>
+                      </View>
+                      {editPicker === 'start' && (
+                        <DateTimePicker
+                          value={frStringToDate(editStartDate)}
+                          mode="date"
+                          display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                          onChange={(_event, selected) => {
+                            if (Platform.OS !== 'ios') setEditPicker(null);
+                            if (selected) {
+                              setEditStartDate(dateToFrString(selected));
+                              if (editErrors.startDate) setEditErrors((prev) => ({ ...prev, startDate: undefined }));
+                            }
+                          }}
+                        />
+                      )}
+                      {!!editErrors.startDate && <Text accessibilityRole="alert" style={[styles.fieldError, { color: theme.danger }]}>{editErrors.startDate}</Text>}
+
+                      <Text style={[styles.label, { color: theme.ink }]}>Date d’échéance (facultatif, JJ/MM/AAAA)</Text>
+                      <View style={styles.dateRow}>
+                        <TextInput
+                          accessibilityLabel="Modifier la date d’échéance"
+                          editable={!savingEdit}
+                          keyboardType="number-pad"
+                          maxLength={10}
+                          placeholder="JJ/MM/AAAA"
+                          placeholderTextColor={theme.muted}
+                          value={editDueDate}
+                          onChangeText={(val) => {
+                            setEditDueDate(formatDateInput(val));
+                            if (editErrors.dueDate) setEditErrors((prev) => ({ ...prev, dueDate: undefined }));
+                          }}
+                          style={[styles.input, styles.dateInput, { color: theme.ink, backgroundColor: theme.surface, borderColor: editErrors.dueDate ? theme.danger : theme.border }]}
+                        />
+                        <TouchableOpacity
+                          accessibilityRole="button"
+                          onPress={() => setEditPicker((prev) => (prev === 'due' ? null : 'due'))}
+                          style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                        >
+                          <Text style={[styles.calendarBtnText, { color: theme.ink }]}>Calendrier</Text>
+                        </TouchableOpacity>
+                      </View>
+                      {editPicker === 'due' && (
+                        <DateTimePicker
+                          value={frStringToDate(editDueDate || editStartDate)}
+                          mode="date"
+                          display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                          onChange={(_event, selected) => {
+                            if (Platform.OS !== 'ios') setEditPicker(null);
+                            if (selected) {
+                              setEditDueDate(dateToFrString(selected));
+                              if (editErrors.dueDate) setEditErrors((prev) => ({ ...prev, dueDate: undefined }));
+                            }
+                          }}
+                        />
+                      )}
+                      {!!editErrors.dueDate && <Text accessibilityRole="alert" style={[styles.fieldError, { color: theme.danger }]}>{editErrors.dueDate}</Text>}
+
+                      {!!editError && <Text accessibilityRole="alert" style={[styles.fieldError, { color: theme.danger }]}>{editError}</Text>}
+
+                      <View style={styles.formActions}>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Enregistrer les modifications"
+                          disabled={savingEdit}
+                          onPress={() => saveProjectEdit(selectedProject)}
+                          style={[styles.primaryBtn, { backgroundColor: theme.primary, opacity: savingEdit ? 0.7 : 1 }]}
+                        >
+                          {savingEdit ? <ActivityIndicator color={theme.onPrimary} /> : <Text style={{ color: theme.onPrimary, fontWeight: '700', fontSize: 16 }}>Enregistrer</Text>}
+                        </Pressable>
+                        <TouchableOpacity
+                          accessibilityRole="button"
+                          accessibilityLabel="Annuler la modification"
+                          disabled={savingEdit}
+                          onPress={() => setEditing(false)}
+                          style={[styles.headerBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                        >
+                          <Text style={[styles.headerBtnText, { color: theme.ink }]}>Annuler</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
                 </View>
               )}
             </View>
@@ -616,6 +860,9 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 13, fontWeight: '700' },
   metaText: { fontSize: 14, lineHeight: 20 },
   detailColumn: { flex: 1, borderWidth: 1, borderRadius: 18, padding: 20, gap: 10 },
+  detailColumnPhone: { flex: 0 },
+  readOnlyNote: { fontSize: 14, fontStyle: 'italic', marginTop: 4 },
+  editSection: { marginTop: 12, gap: 6 },
   detailTitle: { fontSize: 22, fontWeight: '700' },
   detailMeta: { fontSize: 14, lineHeight: 20 },
   detailBody: { fontSize: 16, lineHeight: 24, marginTop: 6 },
