@@ -1,5 +1,5 @@
 import { type ComponentRef, useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, AppState, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Redirect, type Href, useRouter } from 'expo-router';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -148,6 +148,7 @@ export default function Projects() {
   const [memberError, setMemberError] = useState('');
   const [statusBusy, setStatusBusy] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const verifyAndLoad = useCallback(async () => {
     const seq = ++checkSeqRef.current;
@@ -606,6 +607,21 @@ export default function Projects() {
     }
   }
 
+  async function refreshAll() {
+    if (refreshing || signingOut) return;
+    setRefreshing(true);
+    try {
+      await verifyAndLoad();
+      if (selectedId) {
+        const proj = projects.find((p) => p.id === selectedId);
+        const canManage = !!proj && proj.status === 'active' && (role === 'admin' || proj.owner_id === userId);
+        await loadMembersForProject(selectedId, canManage);
+      }
+    } finally {
+      if (mountedRef.current) setRefreshing(false);
+    }
+  }
+
   async function signOut() {
     if (signingOut) return;
     signingOutRef.current = true;
@@ -639,7 +655,12 @@ export default function Projects() {
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.surface }]}>
-      <ScrollView contentContainerStyle={[styles.page, { paddingHorizontal: horizontalGutter }]}>
+      <ScrollView
+        contentContainerStyle={[styles.page, { paddingHorizontal: horizontalGutter }]}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={refreshAll} tintColor={theme.primary} />
+        }
+      >
         <View style={[styles.container, isTablet && styles.containerTablet]}>
           <View style={styles.header}>
             <View style={styles.headerText}>
@@ -647,6 +668,17 @@ export default function Projects() {
               <Text accessibilityRole="header" style={[styles.title, { color: theme.ink }]}>Projets</Text>
             </View>
             <View style={styles.headerActions}>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Actualiser"
+                disabled={refreshing || signingOut}
+                onPress={refreshAll}
+                style={[styles.headerBtn, { backgroundColor: theme.subtle, borderColor: theme.border, opacity: refreshing ? 0.6 : 1 }]}
+              >
+                <Text style={[styles.headerBtnText, { color: theme.ink }]}>
+                  {refreshing ? 'Actualisation...' : 'Actualiser'}
+                </Text>
+              </TouchableOpacity>
               {(role === 'admin' || role === 'owner') && (
                 <TouchableOpacity
                   accessibilityRole="button"
