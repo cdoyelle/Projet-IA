@@ -12,12 +12,18 @@ type ProjectRow = {
   id: string;
   name: string;
   description: string | null;
-  status: 'active' | 'closed';
+  status: 'active' | 'closed' | 'cancelled';
   start_date: string;
   due_date: string | null;
   closed_at: string | null;
   owner_id: string;
 };
+
+function formatProjectStatus(status: ProjectRow['status']): string {
+  if (status === 'active') return 'Actif';
+  if (status === 'closed') return 'Clôturé';
+  return 'Annulé';
+}
 
 type ProjectMember = {
   user_id: string;
@@ -141,6 +147,7 @@ export default function Projects() {
   const [memberBusyId, setMemberBusyId] = useState<string | null>(null);
   const [memberError, setMemberError] = useState('');
   const [statusBusy, setStatusBusy] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
 
   const verifyAndLoad = useCallback(async () => {
     const seq = ++checkSeqRef.current;
@@ -549,6 +556,56 @@ export default function Projects() {
     }
   }
 
+  async function cancelProject(project: ProjectRow) {
+    if (statusBusy || signingOut) return;
+    setStatusBusy(true);
+    setEditError('');
+    setEditMessage('');
+    try {
+      const { data: closedAt, error } = await supabase.rpc('cancel_project', { p_project_id: project.id });
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error) {
+        setEditError('Impossible d’annuler ce projet.');
+        return;
+      }
+      setProjects((prev) =>
+        prev.map((p) => (p.id === project.id ? { ...p, status: 'cancelled', closed_at: String(closedAt) } : p))
+      );
+      setConfirmCancel(false);
+      setEditing(false);
+      setEditMessage('Le projet a été annulé.');
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setEditError('Impossible d’annuler ce projet.');
+    } finally {
+      if (mountedRef.current) setStatusBusy(false);
+    }
+  }
+
+  async function reactivateProject(project: ProjectRow) {
+    if (statusBusy || signingOut) return;
+    setStatusBusy(true);
+    setEditError('');
+    setEditMessage('');
+    try {
+      const { error } = await supabase.rpc('reactivate_project', { p_project_id: project.id });
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error) {
+        setEditError('Impossible de réactiver ce projet.');
+        return;
+      }
+      setProjects((prev) =>
+        prev.map((p) => (p.id === project.id ? { ...p, status: 'active', closed_at: null } : p))
+      );
+      setEditMessage('Le projet a été réactivé.');
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setEditError('Impossible de réactiver ce projet.');
+    } finally {
+      if (mountedRef.current) setStatusBusy(false);
+    }
+  }
+
   async function signOut() {
     if (signingOut) return;
     signingOutRef.current = true;
@@ -789,6 +846,7 @@ export default function Projects() {
                       onPress={() => {
                         setSelectedId(project.id);
                         setEditing(false);
+                        setConfirmCancel(false);
                         setEditMessage('');
                         setEditError('');
                       }}
@@ -804,7 +862,7 @@ export default function Projects() {
                         <Text style={[styles.projectName, { color: theme.ink }]}>{project.name}</Text>
                         <View style={[styles.statusBadge, { backgroundColor: theme.subtle }]}>
                           <Text style={[styles.statusText, { color: project.status === 'active' ? theme.primary : theme.muted }]}>
-                            {project.status === 'active' ? 'Actif' : 'Clôturé'}
+                            {formatProjectStatus(project.status)}
                           </Text>
                         </View>
                       </View>
@@ -825,7 +883,7 @@ export default function Projects() {
                     {selectedProject.name}
                   </Text>
                   <Text style={[styles.detailMeta, { color: theme.muted }]}>
-                    Statut : {selectedProject.status === 'active' ? 'Actif' : 'Clôturé'} · Progression : 0 % · 0 tâche
+                    Statut : {formatProjectStatus(selectedProject.status)} · Progression : 0 % · 0 tâche
                   </Text>
                   <Text style={[styles.detailMeta, { color: theme.muted }]}>
                     Début : {formatDateFr(selectedProject.start_date)}
@@ -833,7 +891,7 @@ export default function Projects() {
                   </Text>
                   {!!selectedProject.closed_at && (
                     <Text style={[styles.detailMeta, { color: theme.muted }]}>
-                      {selectedProject.status === 'closed' ? 'Clôturé le : ' : 'Dernière clôture : '}
+                      {selectedProject.status === 'active' ? 'Dernière clôture : ' : 'Clôturé le : '}
                       {formatDateFr(selectedProject.closed_at.slice(0, 10))}
                     </Text>
                   )}
@@ -871,7 +929,56 @@ export default function Projects() {
                       >
                         <Text style={[styles.calendarBtnText, { color: theme.danger }]}>Clôturer le projet</Text>
                       </TouchableOpacity>
+                      <TouchableOpacity
+                        accessibilityRole="button"
+                        accessibilityLabel="Annuler le projet"
+                        disabled={statusBusy}
+                        onPress={() => setConfirmCancel(true)}
+                        style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.danger, opacity: statusBusy ? 0.6 : 1 }]}
+                      >
+                        <Text style={[styles.calendarBtnText, { color: theme.danger }]}>Annuler le projet</Text>
+                      </TouchableOpacity>
                     </View>
+                  )}
+
+                  {confirmCancel && selectedProject.status === 'active' && (
+                    <View style={[styles.confirmBox, { backgroundColor: theme.surface, borderColor: theme.danger }]}>
+                      <Text style={[styles.confirmText, { color: theme.ink }]}>
+                        Annuler ce projet le masquera aux membres ordinaires tout en conservant son historique.
+                      </Text>
+                      <View style={styles.formActions}>
+                        <TouchableOpacity
+                          accessibilityRole="button"
+                          accessibilityLabel="Confirmer l’annulation"
+                          disabled={statusBusy}
+                          onPress={() => cancelProject(selectedProject)}
+                          style={[styles.calendarBtn, { backgroundColor: theme.danger, borderColor: theme.danger }]}
+                        >
+                          <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>Confirmer l’annulation</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          accessibilityRole="button"
+                          accessibilityLabel="Retour"
+                          disabled={statusBusy}
+                          onPress={() => setConfirmCancel(false)}
+                          style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                        >
+                          <Text style={[styles.calendarBtnText, { color: theme.ink }]}>Retour</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+
+                  {selectedProject.status === 'cancelled' && (role === 'admin' || selectedProject.owner_id === userId) && (
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel="Réactiver le projet"
+                      disabled={statusBusy}
+                      onPress={() => reactivateProject(selectedProject)}
+                      style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.primary, alignSelf: 'flex-start', marginTop: 8, opacity: statusBusy ? 0.6 : 1 }]}
+                    >
+                      <Text style={[styles.calendarBtnText, { color: theme.primary }]}>Réactiver le projet</Text>
+                    </TouchableOpacity>
                   )}
 
                   {selectedProject.status === 'closed' && (role === 'admin' || selectedProject.owner_id === userId) && (
@@ -1161,4 +1268,6 @@ const styles = StyleSheet.create({
   removeBtn: { minHeight: 40, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   addMemberBox: { marginTop: 6, gap: 8 },
   candidateRow: { borderWidth: 1, borderRadius: 12, padding: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  confirmBox: { borderWidth: 1, borderRadius: 12, padding: 14, marginTop: 8, gap: 8 },
+  confirmText: { fontSize: 14, lineHeight: 20 },
 });
