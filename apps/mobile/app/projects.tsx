@@ -18,6 +18,20 @@ type ProjectRow = {
   owner_id: string;
 };
 
+type ProjectMember = {
+  user_id: string;
+  first_name: string;
+  last_name: string;
+  role: UserRole;
+};
+
+type ActiveCandidate = {
+  id: string;
+  first_name: string;
+  last_name: string;
+  role: UserRole;
+};
+
 type ProjectFormErrors = { name?: string; startDate?: string; dueDate?: string };
 type TextInputInstance = ComponentRef<typeof TextInput>;
 
@@ -119,6 +133,12 @@ export default function Projects() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [editMessage, setEditMessage] = useState('');
   const [editError, setEditError] = useState('');
+
+  const [members, setMembers] = useState<ProjectMember[]>([]);
+  const [candidates, setCandidates] = useState<ActiveCandidate[]>([]);
+  const [memberSearch, setMemberSearch] = useState('');
+  const [memberBusyId, setMemberBusyId] = useState<string | null>(null);
+  const [memberError, setMemberError] = useState('');
 
   const verifyAndLoad = useCallback(async () => {
     const seq = ++checkSeqRef.current;
@@ -385,6 +405,96 @@ export default function Projects() {
       setEditError('Impossible d’enregistrer les modifications. Vérifiez votre connexion, puis réessayez.');
     } finally {
       if (mountedRef.current) setSavingEdit(false);
+    }
+  }
+
+  const loadMembersForProject = useCallback(async (projectId: string, canManage: boolean) => {
+    setMemberError('');
+    try {
+      const { data: memberRows, error: mErr } = await supabase.rpc('list_project_members', {
+        p_project_id: projectId,
+      });
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (mErr) {
+        setMemberError('Impossible de charger les membres du projet.');
+      } else {
+        setMembers((memberRows ?? []) as ProjectMember[]);
+      }
+
+      if (canManage) {
+        const { data: candRows } = await supabase.rpc('list_active_profiles_for_project');
+        if (!mountedRef.current || signingOutRef.current) return;
+        setCandidates((candRows ?? []) as ActiveCandidate[]);
+      }
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setMemberError('Impossible de charger les membres du projet.');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!authorized || !selectedId) {
+      setMembers([]);
+      return;
+    }
+    const proj = projects.find((p) => p.id === selectedId);
+    const canManage = !!proj && proj.status === 'active' && (role === 'admin' || proj.owner_id === userId);
+    loadMembersForProject(selectedId, canManage);
+  }, [authorized, selectedId, projects, role, userId, loadMembersForProject]);
+
+  async function addMember(projectId: string, candidate: ActiveCandidate) {
+    if (memberBusyId || signingOut) return;
+    setMemberBusyId(candidate.id);
+    setMemberError('');
+    try {
+      const { error } = await supabase.rpc('add_project_member', {
+        p_project_id: projectId,
+        p_user_id: candidate.id,
+      });
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error) {
+        setMemberError('Impossible d’ajouter ce membre.');
+        return;
+      }
+      setMembers((prev) => [
+        ...prev,
+        {
+          user_id: candidate.id,
+          first_name: candidate.first_name,
+          last_name: candidate.last_name,
+          role: candidate.role,
+        },
+      ]);
+      setMemberSearch('');
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setMemberError('Impossible d’ajouter ce membre.');
+    } finally {
+      if (mountedRef.current) setMemberBusyId(null);
+    }
+  }
+
+  async function removeMember(projectId: string, memberUserId: string) {
+    if (memberBusyId || signingOut) return;
+    setMemberBusyId(memberUserId);
+    setMemberError('');
+    try {
+      const { error } = await supabase
+        .from('project_members')
+        .delete()
+        .eq('project_id', projectId)
+        .eq('user_id', memberUserId);
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error) {
+        setMemberError('Impossible de retirer ce membre.');
+        return;
+      }
+      setMembers((prev) => prev.filter((m) => m.user_id !== memberUserId));
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setMemberError('Impossible de retirer ce membre.');
+    } finally {
+      if (mountedRef.current) setMemberBusyId(null);
     }
   }
 
@@ -822,6 +932,90 @@ export default function Projects() {
                       </View>
                     </View>
                   )}
+
+                  <View style={styles.membersSection}>
+                    <Text accessibilityRole="header" style={[styles.membersTitle, { color: theme.ink }]}>
+                      Membres du projet
+                    </Text>
+                    {!!memberError && (
+                      <Text accessibilityRole="alert" style={[styles.fieldError, { color: theme.danger }]}>{memberError}</Text>
+                    )}
+                    {members.length === 0 ? (
+                      <Text style={[styles.metaText, { color: theme.muted }]}>Aucun membre ajouté pour le moment.</Text>
+                    ) : (
+                      members.map((member) => (
+                        <View
+                          key={member.user_id}
+                          style={[styles.memberRow, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.memberName, { color: theme.ink }]}>
+                              {member.first_name} {member.last_name}
+                            </Text>
+                            <Text style={[styles.metaText, { color: theme.muted }]}>
+                              {member.role === 'admin' ? 'Administrateur' : member.role === 'owner' ? 'Responsable' : 'Membre'}
+                            </Text>
+                          </View>
+                          {selectedProject.status === 'active' && (role === 'admin' || selectedProject.owner_id === userId) && (
+                            <TouchableOpacity
+                              accessibilityRole="button"
+                              accessibilityLabel={`Retirer ${member.first_name}`}
+                              disabled={memberBusyId === member.user_id}
+                              onPress={() => removeMember(selectedProject.id, member.user_id)}
+                              style={[styles.removeBtn, { backgroundColor: theme.subtle, borderColor: theme.danger, opacity: memberBusyId === member.user_id ? 0.6 : 1 }]}
+                            >
+                              <Text style={{ color: theme.danger, fontWeight: '600', fontSize: 13 }}>Retirer</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      ))
+                    )}
+
+                    {selectedProject.status === 'active' && (role === 'admin' || selectedProject.owner_id === userId) && (
+                      <View style={styles.addMemberBox}>
+                        <Text style={[styles.label, { color: theme.ink }]}>Ajouter un compte actif</Text>
+                        <TextInput
+                          accessibilityLabel="Rechercher un compte actif"
+                          placeholder="Rechercher par prénom ou nom..."
+                          placeholderTextColor={theme.muted}
+                          value={memberSearch}
+                          onChangeText={setMemberSearch}
+                          style={[styles.input, { color: theme.ink, backgroundColor: theme.surface, borderColor: theme.border }]}
+                        />
+                        {(() => {
+                          const q = memberSearch.trim().toLowerCase();
+                          const memberIds = new Set(members.map((m) => m.user_id));
+                          const available = candidates.filter((c) => {
+                            if (memberIds.has(c.id)) return false;
+                            if (!q) return true;
+                            return `${c.first_name} ${c.last_name}`.toLowerCase().includes(q);
+                          });
+                          if (available.length === 0) {
+                            return (
+                              <Text style={[styles.metaText, { color: theme.muted, marginTop: 6 }]}>
+                                Aucun compte actif trouvé.
+                              </Text>
+                            );
+                          }
+                          return available.slice(0, 6).map((cand) => (
+                            <TouchableOpacity
+                              key={cand.id}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Ajouter ${cand.first_name} ${cand.last_name}`}
+                              disabled={memberBusyId === cand.id}
+                              onPress={() => addMember(selectedProject.id, cand)}
+                              style={[styles.candidateRow, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                            >
+                              <Text style={[styles.memberName, { color: theme.ink }]}>
+                                {cand.first_name} {cand.last_name}
+                              </Text>
+                              <Text style={{ color: theme.primary, fontWeight: '600', fontSize: 14 }}>Ajouter</Text>
+                            </TouchableOpacity>
+                          ));
+                        })()}
+                      </View>
+                    )}
+                  </View>
                 </View>
               )}
             </View>
@@ -879,4 +1073,11 @@ const styles = StyleSheet.create({
   fieldError: { fontSize: 14, lineHeight: 20, marginTop: 4 },
   formActions: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 16, flexWrap: 'wrap' },
   primaryBtn: { minHeight: 48, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  membersSection: { marginTop: 18, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#e2e8f0', gap: 10 },
+  membersTitle: { fontSize: 18, fontWeight: '700' },
+  memberRow: { borderWidth: 1, borderRadius: 12, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  memberName: { fontSize: 15, fontWeight: '600' },
+  removeBtn: { minHeight: 40, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  addMemberBox: { marginTop: 6, gap: 8 },
+  candidateRow: { borderWidth: 1, borderRadius: 12, padding: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
 });
