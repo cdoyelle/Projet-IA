@@ -190,6 +190,7 @@ export default function Projects() {
   const [creatingTask, setCreatingTask] = useState(false);
   const [taskMessage, setTaskMessage] = useState('');
   const [taskError, setTaskError] = useState('');
+  const [taskStatusBusyId, setTaskStatusBusyId] = useState<string | null>(null);
 
   const verifyAndLoad = useCallback(async () => {
     const seq = ++checkSeqRef.current;
@@ -728,6 +729,33 @@ export default function Projects() {
       setTaskError('Impossible de créer la tâche. Vérifiez votre connexion, puis réessayez.');
     } finally {
       if (mountedRef.current) setCreatingTask(false);
+    }
+  }
+
+  async function changeMyTaskStatus(task: TaskRow, nextStatus: 'created' | 'in_progress' | 'done') {
+    if (taskStatusBusyId || signingOut) return;
+    setTaskStatusBusyId(task.id);
+    setTaskError('');
+    setTaskMessage('');
+    try {
+      const { data: confirmedStatus, error } = await supabase.rpc('update_my_task_status', {
+        p_task_id: task.id,
+        p_status: nextStatus,
+      });
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error || !confirmedStatus) {
+        setTaskError('Impossible de mettre à jour le statut de la tâche.');
+        return;
+      }
+      setTasks((prev) =>
+        prev.map((t) => (t.id === task.id ? { ...t, status: confirmedStatus as TaskRow['status'] } : t))
+      );
+      setTaskMessage(`Statut mis à jour : ${formatTaskStatus(confirmedStatus as TaskRow['status'])}.`);
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setTaskError('Impossible de mettre à jour le statut de la tâche.');
+    } finally {
+      if (mountedRef.current) setTaskStatusBusyId(null);
     }
   }
 
@@ -1579,6 +1607,60 @@ export default function Projects() {
                               <Text style={[styles.metaText, { color: theme.muted }]}>
                                 Tags : {task.tags.join(', ')}
                               </Text>
+                            )}
+                            {selectedProject.status === 'active' && task.assignee_id === userId && (
+                              <View style={[styles.formActions, { marginTop: 6 }]}>
+                                {task.status === 'created' && (
+                                  <>
+                                    <TouchableOpacity
+                                      accessibilityRole="button"
+                                      disabled={taskStatusBusyId === task.id}
+                                      onPress={() => changeMyTaskStatus(task, 'in_progress')}
+                                      style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.primary }]}
+                                    >
+                                      <Text style={{ color: theme.primary, fontWeight: '600', fontSize: 13 }}>Passer en cours</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                      accessibilityRole="button"
+                                      disabled={taskStatusBusyId === task.id}
+                                      onPress={() => changeMyTaskStatus(task, 'done')}
+                                      style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.success }]}
+                                    >
+                                      <Text style={{ color: theme.success, fontWeight: '600', fontSize: 13 }}>Terminer</Text>
+                                    </TouchableOpacity>
+                                  </>
+                                )}
+                                {task.status === 'in_progress' && (
+                                  <>
+                                    <TouchableOpacity
+                                      accessibilityRole="button"
+                                      disabled={taskStatusBusyId === task.id}
+                                      onPress={() => changeMyTaskStatus(task, 'created')}
+                                      style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                                    >
+                                      <Text style={{ color: theme.ink, fontWeight: '600', fontSize: 13 }}>Remettre en créée</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                      accessibilityRole="button"
+                                      disabled={taskStatusBusyId === task.id}
+                                      onPress={() => changeMyTaskStatus(task, 'done')}
+                                      style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.success }]}
+                                    >
+                                      <Text style={{ color: theme.success, fontWeight: '600', fontSize: 13 }}>Terminer</Text>
+                                    </TouchableOpacity>
+                                  </>
+                                )}
+                                {task.status === 'done' && (
+                                  <TouchableOpacity
+                                    accessibilityRole="button"
+                                    disabled={taskStatusBusyId === task.id}
+                                    onPress={() => changeMyTaskStatus(task, 'in_progress')}
+                                    style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.primary }]}
+                                  >
+                                    <Text style={{ color: theme.primary, fontWeight: '600', fontSize: 13 }}>Remettre en cours</Text>
+                                  </TouchableOpacity>
+                                )}
+                              </View>
                             )}
                           </View>
                         );
