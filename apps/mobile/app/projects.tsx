@@ -50,6 +50,7 @@ type TaskRow = {
   tags: string[];
   assignee_id: string | null;
   has_started: boolean;
+  created_at: string;
 };
 
 type TaskFormErrors = { title?: string; dueDate?: string };
@@ -206,6 +207,15 @@ export default function Projects() {
   const [savingTaskEdit, setSavingTaskEdit] = useState(false);
   const [confirmCancelTaskId, setConfirmCancelTaskId] = useState<string | null>(null);
   const [confirmDeleteTaskId, setConfirmDeleteTaskId] = useState<string | null>(null);
+
+  const [showTaskFilters, setShowTaskFilters] = useState(false);
+  const [filterStatus, setFilterStatus] = useState<'all' | TaskRow['status']>('all');
+  const [filterPriority, setFilterPriority] = useState<'all' | TaskRow['priority']>('all');
+  const [filterAssignee, setFilterAssignee] = useState<'all' | 'unassigned' | string>('all');
+  const [filterTag, setFilterTag] = useState('');
+  const [filterDue, setFilterDue] = useState<'all' | 'overdue' | 'today' | 'upcoming'>('all');
+  const [sortBy, setSortBy] = useState<'due_date' | 'priority' | 'created_at' | 'title'>('created_at');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
   const verifyAndLoad = useCallback(async () => {
     const seq = ++checkSeqRef.current;
@@ -496,7 +506,7 @@ export default function Projects() {
 
       const { data: taskRows } = await supabase
         .from('tasks')
-        .select('id, project_id, title, description, status, priority, due_date, tags, assignee_id, has_started')
+        .select('id, project_id, title, description, status, priority, due_date, tags, assignee_id, has_started, created_at')
         .eq('project_id', projectId)
         .order('created_at', { ascending: false });
       if (!mountedRef.current || signingOutRef.current) return;
@@ -720,7 +730,7 @@ export default function Projects() {
           assignee_id: taskAssigneeId,
           created_by: userId,
         })
-        .select('id, project_id, title, description, status, priority, due_date, tags, assignee_id, has_started')
+        .select('id, project_id, title, description, status, priority, due_date, tags, assignee_id, has_started, created_at')
         .single();
 
       if (!mountedRef.current || signingOutRef.current) return;
@@ -796,7 +806,7 @@ export default function Projects() {
           assignee_id: editTaskAssigneeId,
         })
         .eq('id', task.id)
-        .select('id, project_id, title, description, status, priority, due_date, tags, assignee_id, has_started')
+        .select('id, project_id, title, description, status, priority, due_date, tags, assignee_id, has_started, created_at')
         .single();
 
       if (!mountedRef.current || signingOutRef.current) return;
@@ -1770,10 +1780,223 @@ export default function Projects() {
                       </View>
                     )}
 
-                    {tasks.length === 0 ? (
-                      <Text style={[styles.metaText, { color: theme.muted }]}>Aucune tâche pour le moment.</Text>
-                    ) : (
-                      tasks.map((task) => {
+                    {tasks.length > 0 && (
+                      <View style={styles.filterBar}>
+                        <View style={styles.formActions}>
+                          <TouchableOpacity
+                            accessibilityRole="button"
+                            onPress={() => setShowTaskFilters((prev) => !prev)}
+                            style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                          >
+                            <Text style={[styles.calendarBtnText, { color: theme.ink }]}>
+                              {showTaskFilters ? 'Masquer filtres et tri' : 'Filtrer et trier'}
+                            </Text>
+                          </TouchableOpacity>
+                          {(() => {
+                            const activeCount =
+                              (filterStatus !== 'all' ? 1 : 0) +
+                              (filterPriority !== 'all' ? 1 : 0) +
+                              (filterAssignee !== 'all' ? 1 : 0) +
+                              (filterTag.trim() ? 1 : 0) +
+                              (filterDue !== 'all' ? 1 : 0);
+                            if (activeCount === 0) return null;
+                            return (
+                              <>
+                                <Text style={[styles.metaText, { color: theme.primary, fontWeight: '700' }]}>
+                                  Filtres actifs : {activeCount}
+                                </Text>
+                                <TouchableOpacity
+                                  accessibilityRole="button"
+                                  onPress={() => {
+                                    setFilterStatus('all');
+                                    setFilterPriority('all');
+                                    setFilterAssignee('all');
+                                    setFilterTag('');
+                                    setFilterDue('all');
+                                  }}
+                                  style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.danger }]}
+                                >
+                                  <Text style={{ color: theme.danger, fontWeight: '600', fontSize: 13 }}>Effacer les filtres</Text>
+                                </TouchableOpacity>
+                              </>
+                            );
+                          })()}
+                        </View>
+
+                        {showTaskFilters && (
+                          <View style={[styles.confirmBox, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                            <Text style={[styles.label, { color: theme.ink }]}>Statut</Text>
+                            <View style={styles.formActions}>
+                              {(['all', 'created', 'in_progress', 'done', 'cancelled'] as const).map((st) => (
+                                <TouchableOpacity
+                                  key={st}
+                                  accessibilityRole="button"
+                                  onPress={() => setFilterStatus(st)}
+                                  style={[styles.calendarBtn, { backgroundColor: filterStatus === st ? theme.primary : theme.subtle, borderColor: filterStatus === st ? theme.primary : theme.border }]}
+                                >
+                                  <Text style={{ color: filterStatus === st ? theme.onPrimary : theme.ink, fontSize: 13, fontWeight: '600' }}>
+                                    {st === 'all' ? 'Tous' : formatTaskStatus(st)}
+                                  </Text>
+                                </TouchableOpacity>
+                              ))}
+                            </View>
+
+                            <Text style={[styles.label, { color: theme.ink }]}>Priorité</Text>
+                            <View style={styles.formActions}>
+                              {(['all', 'low', 'normal', 'high'] as const).map((pr) => (
+                                <TouchableOpacity
+                                  key={pr}
+                                  accessibilityRole="button"
+                                  onPress={() => setFilterPriority(pr)}
+                                  style={[styles.calendarBtn, { backgroundColor: filterPriority === pr ? theme.primary : theme.subtle, borderColor: filterPriority === pr ? theme.primary : theme.border }]}
+                                >
+                                  <Text style={{ color: filterPriority === pr ? theme.onPrimary : theme.ink, fontSize: 13, fontWeight: '600' }}>
+                                    {pr === 'all' ? 'Toutes' : formatTaskPriority(pr)}
+                                  </Text>
+                                </TouchableOpacity>
+                              ))}
+                            </View>
+
+                            <Text style={[styles.label, { color: theme.ink }]}>Membre</Text>
+                            <View style={styles.formActions}>
+                              <TouchableOpacity
+                                accessibilityRole="button"
+                                onPress={() => setFilterAssignee('all')}
+                                style={[styles.calendarBtn, { backgroundColor: filterAssignee === 'all' ? theme.primary : theme.subtle, borderColor: filterAssignee === 'all' ? theme.primary : theme.border }]}
+                              >
+                                <Text style={{ color: filterAssignee === 'all' ? theme.onPrimary : theme.ink, fontSize: 13, fontWeight: '600' }}>Tous</Text>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                accessibilityRole="button"
+                                onPress={() => setFilterAssignee('unassigned')}
+                                style={[styles.calendarBtn, { backgroundColor: filterAssignee === 'unassigned' ? theme.primary : theme.subtle, borderColor: filterAssignee === 'unassigned' ? theme.primary : theme.border }]}
+                              >
+                                <Text style={{ color: filterAssignee === 'unassigned' ? theme.onPrimary : theme.ink, fontSize: 13, fontWeight: '600' }}>Non attribuée</Text>
+                              </TouchableOpacity>
+                              {assignables.map((person) => (
+                                <TouchableOpacity
+                                  key={person.id}
+                                  accessibilityRole="button"
+                                  onPress={() => setFilterAssignee(person.id)}
+                                  style={[styles.calendarBtn, { backgroundColor: filterAssignee === person.id ? theme.primary : theme.subtle, borderColor: filterAssignee === person.id ? theme.primary : theme.border }]}
+                                >
+                                  <Text style={{ color: filterAssignee === person.id ? theme.onPrimary : theme.ink, fontSize: 13, fontWeight: '600' }}>
+                                    {person.first_name} {person.last_name}
+                                  </Text>
+                                </TouchableOpacity>
+                              ))}
+                            </View>
+
+                            <Text style={[styles.label, { color: theme.ink }]}>Échéance</Text>
+                            <View style={styles.formActions}>
+                              {([
+                                { key: 'all', label: 'Toutes' },
+                                { key: 'overdue', label: 'En retard' },
+                                { key: 'today', label: 'Aujourd’hui' },
+                                { key: 'upcoming', label: 'À venir' },
+                              ] as const).map((d) => (
+                                <TouchableOpacity
+                                  key={d.key}
+                                  accessibilityRole="button"
+                                  onPress={() => setFilterDue(d.key)}
+                                  style={[styles.calendarBtn, { backgroundColor: filterDue === d.key ? theme.primary : theme.subtle, borderColor: filterDue === d.key ? theme.primary : theme.border }]}
+                                >
+                                  <Text style={{ color: filterDue === d.key ? theme.onPrimary : theme.ink, fontSize: 13, fontWeight: '600' }}>{d.label}</Text>
+                                </TouchableOpacity>
+                              ))}
+                            </View>
+
+                            <Text style={[styles.label, { color: theme.ink }]}>Tag</Text>
+                            <TextInput
+                              accessibilityLabel="Filtrer par tag"
+                              placeholder="Ex: urgent"
+                              placeholderTextColor={theme.muted}
+                              value={filterTag}
+                              onChangeText={setFilterTag}
+                              style={[styles.input, { color: theme.ink, backgroundColor: theme.raised, borderColor: theme.border }]}
+                            />
+
+                            <Text style={[styles.label, { color: theme.ink }]}>Trier par</Text>
+                            <View style={styles.formActions}>
+                              {([
+                                { key: 'due_date', label: 'Échéance' },
+                                { key: 'priority', label: 'Priorité' },
+                                { key: 'created_at', label: 'Date de création' },
+                                { key: 'title', label: 'Titre' },
+                              ] as const).map((s) => (
+                                <TouchableOpacity
+                                  key={s.key}
+                                  accessibilityRole="button"
+                                  onPress={() => setSortBy(s.key)}
+                                  style={[styles.calendarBtn, { backgroundColor: sortBy === s.key ? theme.primary : theme.subtle, borderColor: sortBy === s.key ? theme.primary : theme.border }]}
+                                >
+                                  <Text style={{ color: sortBy === s.key ? theme.onPrimary : theme.ink, fontSize: 13, fontWeight: '600' }}>{s.label}</Text>
+                                </TouchableOpacity>
+                              ))}
+                              <TouchableOpacity
+                                accessibilityRole="button"
+                                onPress={() => setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+                                style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.primary }]}
+                              >
+                                <Text style={{ color: theme.primary, fontSize: 13, fontWeight: '700' }}>
+                                  {sortDir === 'asc' ? 'Croissant ↑' : 'Décroissant ↓'}
+                                </Text>
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+                        )}
+                      </View>
+                    )}
+
+                    {(() => {
+                      const todayIso = parseFrDateToIso(todayFrDate())!;
+                      const tagQuery = filterTag.trim().toLowerCase();
+                      const prioRank: Record<TaskRow['priority'], number> = { low: 1, normal: 2, high: 3 };
+                      const visibleTasks = tasks
+                        .filter((t) => {
+                          if (filterStatus !== 'all' && t.status !== filterStatus) return false;
+                          if (filterPriority !== 'all' && t.priority !== filterPriority) return false;
+                          if (filterAssignee === 'unassigned' && t.assignee_id !== null) return false;
+                          if (filterAssignee !== 'all' && filterAssignee !== 'unassigned' && t.assignee_id !== filterAssignee) return false;
+                          if (tagQuery && !t.tags.some((tg) => tg.toLowerCase().includes(tagQuery))) return false;
+                          if (filterDue === 'overdue' && t.due_date >= todayIso) return false;
+                          if (filterDue === 'today' && t.due_date !== todayIso) return false;
+                          if (filterDue === 'upcoming' && t.due_date <= todayIso) return false;
+                          return true;
+                        })
+                        .sort((a, b) => {
+                          let cmp = 0;
+                          if (sortBy === 'due_date') cmp = a.due_date.localeCompare(b.due_date);
+                          else if (sortBy === 'priority') cmp = prioRank[a.priority] - prioRank[b.priority];
+                          else if (sortBy === 'created_at') cmp = a.created_at.localeCompare(b.created_at);
+                          else cmp = a.title.localeCompare(b.title, 'fr');
+                          return sortDir === 'asc' ? cmp : -cmp;
+                        });
+
+                      if (tasks.length === 0) {
+                        return <Text style={[styles.metaText, { color: theme.muted }]}>Aucune tâche pour le moment.</Text>;
+                      }
+                      if (visibleTasks.length === 0) {
+                        return (
+                          <View style={[styles.confirmBox, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                            <Text style={[styles.metaText, { color: theme.ink }]}>Aucune tâche ne correspond à ces filtres.</Text>
+                            <TouchableOpacity
+                              accessibilityRole="button"
+                              onPress={() => {
+                                setFilterStatus('all');
+                                setFilterPriority('all');
+                                setFilterAssignee('all');
+                                setFilterTag('');
+                                setFilterDue('all');
+                              }}
+                              style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.primary, alignSelf: 'flex-start' }]}
+                            >
+                              <Text style={{ color: theme.primary, fontWeight: '600', fontSize: 13 }}>Effacer les filtres</Text>
+                            </TouchableOpacity>
+                          </View>
+                        );
+                      }
+                      return visibleTasks.map((task) => {
                         const assignee = assignables.find((a) => a.id === task.assignee_id);
                         return (
                           <View
@@ -2105,8 +2328,8 @@ export default function Projects() {
                             )}
                           </View>
                         );
-                      })
-                    )}
+                      });
+                    })()}
                   </View>
                 </View>
               )}
@@ -2174,4 +2397,5 @@ const styles = StyleSheet.create({
   candidateRow: { borderWidth: 1, borderRadius: 12, padding: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   confirmBox: { borderWidth: 1, borderRadius: 12, padding: 14, marginTop: 8, gap: 8 },
   confirmText: { fontSize: 14, lineHeight: 20 },
+  filterBar: { gap: 8 },
 });
