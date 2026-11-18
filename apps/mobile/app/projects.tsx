@@ -44,7 +44,7 @@ type TaskRow = {
   project_id: string;
   title: string;
   description: string | null;
-  status: 'created' | 'in_progress' | 'done';
+  status: 'created' | 'in_progress' | 'done' | 'cancelled';
   priority: 'low' | 'normal' | 'high';
   due_date: string;
   tags: string[];
@@ -56,7 +56,8 @@ type TaskFormErrors = { title?: string; dueDate?: string };
 function formatTaskStatus(status: TaskRow['status']): string {
   if (status === 'created') return 'Créée';
   if (status === 'in_progress') return 'En cours';
-  return 'Terminée';
+  if (status === 'done') return 'Terminée';
+  return 'Annulée';
 }
 
 function formatTaskPriority(priority: TaskRow['priority']): string {
@@ -202,6 +203,7 @@ export default function Projects() {
   const [editTaskPickerOpen, setEditTaskPickerOpen] = useState(false);
   const [editTaskErrors, setEditTaskErrors] = useState<TaskFormErrors>({});
   const [savingTaskEdit, setSavingTaskEdit] = useState(false);
+  const [confirmCancelTaskId, setConfirmCancelTaskId] = useState<string | null>(null);
 
   const verifyAndLoad = useCallback(async () => {
     const seq = ++checkSeqRef.current;
@@ -832,6 +834,58 @@ export default function Projects() {
     } catch {
       if (!mountedRef.current || signingOutRef.current) return;
       setTaskError('Impossible de remettre cette tâche en cours.');
+    } finally {
+      if (mountedRef.current) setTaskStatusBusyId(null);
+    }
+  }
+
+  async function cancelTask(task: TaskRow) {
+    if (taskStatusBusyId || signingOut) return;
+    setTaskStatusBusyId(task.id);
+    setTaskError('');
+    setTaskMessage('');
+    try {
+      const { error } = await supabase.rpc('cancel_task', { p_task_id: task.id });
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error) {
+        setTaskError('Impossible d’annuler cette tâche.');
+        return;
+      }
+      setTasks((prev) =>
+        prev.map((t) => (t.id === task.id ? { ...t, status: 'cancelled' } : t))
+      );
+      setConfirmCancelTaskId(null);
+      setEditingTaskId(null);
+      setTaskMessage('La tâche a été annulée.');
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setTaskError('Impossible d’annuler cette tâche.');
+    } finally {
+      if (mountedRef.current) setTaskStatusBusyId(null);
+    }
+  }
+
+  async function reactivateTask(task: TaskRow) {
+    if (taskStatusBusyId || signingOut) return;
+    setTaskStatusBusyId(task.id);
+    setTaskError('');
+    setTaskMessage('');
+    try {
+      const { data: restoredStatus, error } = await supabase.rpc('reactivate_task', {
+        p_task_id: task.id,
+      });
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error || !restoredStatus) {
+        setTaskError('Impossible de réactiver cette tâche.');
+        return;
+      }
+      setTasks((prev) =>
+        prev.map((t) => (t.id === task.id ? { ...t, status: restoredStatus as TaskRow['status'] } : t))
+      );
+      setTaskMessage(`Tâche réactivée : statut ${formatTaskStatus(restoredStatus as TaskRow['status'])}.`);
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setTaskError('Impossible de réactiver cette tâche.');
     } finally {
       if (mountedRef.current) setTaskStatusBusyId(null);
     }
@@ -1769,31 +1823,77 @@ export default function Projects() {
                             )}
                             {selectedProject.status === 'active' && (role === 'admin' || selectedProject.owner_id === userId) && editingTaskId !== task.id && (
                               <View style={[styles.formActions, { marginTop: 6 }]}>
-                                {task.status !== 'done' ? (
+                                {task.status === 'cancelled' ? (
                                   <TouchableOpacity
                                     accessibilityRole="button"
-                                    onPress={() => startEditingTask(task)}
-                                    style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                                    disabled={taskStatusBusyId === task.id}
+                                    onPress={() => reactivateTask(task)}
+                                    style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.primary }]}
                                   >
-                                    <Text style={{ color: theme.ink, fontWeight: '600', fontSize: 13 }}>Modifier</Text>
+                                    <Text style={{ color: theme.primary, fontWeight: '600', fontSize: 13 }}>Réactiver</Text>
                                   </TouchableOpacity>
                                 ) : (
                                   <>
-                                    <Text style={[styles.metaText, { color: theme.muted }]}>
-                                      Champs verrouillés (tâche terminée)
-                                    </Text>
-                                    {task.assignee_id !== userId && (
+                                    {task.status !== 'done' ? (
                                       <TouchableOpacity
                                         accessibilityRole="button"
-                                        disabled={taskStatusBusyId === task.id}
-                                        onPress={() => reopenDoneTask(task)}
-                                        style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.primary }]}
+                                        onPress={() => startEditingTask(task)}
+                                        style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
                                       >
-                                        <Text style={{ color: theme.primary, fontWeight: '600', fontSize: 13 }}>Remettre en cours</Text>
+                                        <Text style={{ color: theme.ink, fontWeight: '600', fontSize: 13 }}>Modifier</Text>
                                       </TouchableOpacity>
+                                    ) : (
+                                      <>
+                                        <Text style={[styles.metaText, { color: theme.muted }]}>
+                                          Champs verrouillés (tâche terminée)
+                                        </Text>
+                                        {task.assignee_id !== userId && (
+                                          <TouchableOpacity
+                                            accessibilityRole="button"
+                                            disabled={taskStatusBusyId === task.id}
+                                            onPress={() => reopenDoneTask(task)}
+                                            style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.primary }]}
+                                          >
+                                            <Text style={{ color: theme.primary, fontWeight: '600', fontSize: 13 }}>Remettre en cours</Text>
+                                          </TouchableOpacity>
+                                        )}
+                                      </>
                                     )}
+                                    <TouchableOpacity
+                                      accessibilityRole="button"
+                                      disabled={taskStatusBusyId === task.id}
+                                      onPress={() => setConfirmCancelTaskId(task.id)}
+                                      style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.danger }]}
+                                    >
+                                      <Text style={{ color: theme.danger, fontWeight: '600', fontSize: 13 }}>Annuler</Text>
+                                    </TouchableOpacity>
                                   </>
                                 )}
+                              </View>
+                            )}
+                            {confirmCancelTaskId === task.id && task.status !== 'cancelled' && (
+                              <View style={[styles.confirmBox, { width: '100%', backgroundColor: theme.surface, borderColor: theme.danger }]}>
+                                <Text style={[styles.confirmText, { color: theme.ink }]}>
+                                  Annuler cette tâche la passera au statut Annulée tout en conservant son statut précédent.
+                                </Text>
+                                <View style={styles.formActions}>
+                                  <TouchableOpacity
+                                    accessibilityRole="button"
+                                    disabled={taskStatusBusyId === task.id}
+                                    onPress={() => cancelTask(task)}
+                                    style={[styles.calendarBtn, { backgroundColor: theme.danger, borderColor: theme.danger }]}
+                                  >
+                                    <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Confirmer l’annulation</Text>
+                                  </TouchableOpacity>
+                                  <TouchableOpacity
+                                    accessibilityRole="button"
+                                    disabled={taskStatusBusyId === task.id}
+                                    onPress={() => setConfirmCancelTaskId(null)}
+                                    style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                                  >
+                                    <Text style={[styles.calendarBtnText, { color: theme.ink }]}>Retour</Text>
+                                  </TouchableOpacity>
+                                </View>
                               </View>
                             )}
                             {editingTaskId === task.id && (
