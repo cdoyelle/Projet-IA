@@ -39,6 +39,32 @@ type ActiveCandidate = {
   role: UserRole;
 };
 
+type TaskRow = {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string | null;
+  status: 'created' | 'in_progress' | 'done';
+  priority: 'low' | 'normal' | 'high';
+  due_date: string;
+  tags: string[];
+  assignee_id: string | null;
+};
+
+type TaskFormErrors = { title?: string; dueDate?: string };
+
+function formatTaskStatus(status: TaskRow['status']): string {
+  if (status === 'created') return 'Créée';
+  if (status === 'in_progress') return 'En cours';
+  return 'Terminée';
+}
+
+function formatTaskPriority(priority: TaskRow['priority']): string {
+  if (priority === 'low') return 'Basse';
+  if (priority === 'high') return 'Haute';
+  return 'Normale';
+}
+
 type ProjectFormErrors = { name?: string; startDate?: string; dueDate?: string };
 type TextInputInstance = ComponentRef<typeof TextInput>;
 
@@ -149,6 +175,21 @@ export default function Projects() {
   const [statusBusy, setStatusBusy] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  const [tasks, setTasks] = useState<TaskRow[]>([]);
+  const [assignables, setAssignables] = useState<ActiveCandidate[]>([]);
+  const [showTaskForm, setShowTaskForm] = useState(false);
+  const [taskTitle, setTaskTitle] = useState('');
+  const [taskDescription, setTaskDescription] = useState('');
+  const [taskDueDate, setTaskDueDate] = useState('');
+  const [taskPriority, setTaskPriority] = useState<TaskRow['priority']>('normal');
+  const [taskTags, setTaskTags] = useState('');
+  const [taskAssigneeId, setTaskAssigneeId] = useState<string | null>(null);
+  const [taskPickerOpen, setTaskPickerOpen] = useState(false);
+  const [taskErrors, setTaskErrors] = useState<TaskFormErrors>({});
+  const [creatingTask, setCreatingTask] = useState(false);
+  const [taskMessage, setTaskMessage] = useState('');
+  const [taskError, setTaskError] = useState('');
 
   const verifyAndLoad = useCallback(async () => {
     const seq = ++checkSeqRef.current;
@@ -436,6 +477,20 @@ export default function Projects() {
         if (!mountedRef.current || signingOutRef.current) return;
         setCandidates((candRows ?? []) as ActiveCandidate[]);
       }
+
+      const { data: taskRows } = await supabase
+        .from('tasks')
+        .select('id, project_id, title, description, status, priority, due_date, tags, assignee_id')
+        .eq('project_id', projectId)
+        .order('created_at', { ascending: false });
+      if (!mountedRef.current || signingOutRef.current) return;
+      setTasks((taskRows ?? []) as TaskRow[]);
+
+      const { data: assignRows } = await supabase.rpc('list_project_assignable_profiles', {
+        p_project_id: projectId,
+      });
+      if (!mountedRef.current || signingOutRef.current) return;
+      setAssignables((assignRows ?? []) as ActiveCandidate[]);
     } catch {
       if (!mountedRef.current || signingOutRef.current) return;
       setMemberError('Impossible de charger les membres du projet.');
@@ -604,6 +659,75 @@ export default function Projects() {
       setEditError('Impossible de réactiver ce projet.');
     } finally {
       if (mountedRef.current) setStatusBusy(false);
+    }
+  }
+
+  async function createTask(project: ProjectRow) {
+    if (creatingTask || signingOut || !userId) return;
+    const errors: TaskFormErrors = {};
+    const trimmedTitle = taskTitle.trim();
+    const trimmedDue = taskDueDate.trim();
+    const dueIso = parseFrDateToIso(trimmedDue);
+
+    if (!trimmedTitle) {
+      errors.title = 'Saisissez le titre de la tâche.';
+    } else if (trimmedTitle.length > 150) {
+      errors.title = 'Le titre ne doit pas dépasser 150 caractères.';
+    }
+    if (!dueIso) {
+      errors.dueDate = 'Saisissez une date d’échéance valide (JJ/MM/AAAA).';
+    } else if (dueIso < parseFrDateToIso(todayFrDate())!) {
+      errors.dueDate = 'La date d’échéance ne peut pas être dans le passé.';
+    }
+
+    setTaskErrors(errors);
+    setTaskError('');
+    if (Object.keys(errors).length > 0) return;
+
+    const parsedTags = taskTags
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean);
+
+    setCreatingTask(true);
+    try {
+      const { data: created, error } = await supabase
+        .from('tasks')
+        .insert({
+          project_id: project.id,
+          title: trimmedTitle,
+          description: taskDescription.trim() || null,
+          status: 'created',
+          priority: taskPriority,
+          due_date: dueIso!,
+          tags: parsedTags,
+          assignee_id: taskAssigneeId,
+          created_by: userId,
+        })
+        .select('id, project_id, title, description, status, priority, due_date, tags, assignee_id')
+        .single();
+
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error || !created) {
+        setTaskError('Impossible de créer la tâche. Vérifiez vos droits ou votre connexion.');
+        return;
+      }
+
+      setTasks((prev) => [created as TaskRow, ...prev]);
+      setTaskTitle('');
+      setTaskDescription('');
+      setTaskDueDate('');
+      setTaskPriority('normal');
+      setTaskTags('');
+      setTaskAssigneeId(null);
+      setTaskErrors({});
+      setShowTaskForm(false);
+      setTaskMessage('La tâche a été créée avec le statut Créée.');
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setTaskError('Impossible de créer la tâche. Vérifiez votre connexion, puis réessayez.');
+    } finally {
+      if (mountedRef.current) setCreatingTask(false);
     }
   }
 
@@ -1234,6 +1358,231 @@ export default function Projects() {
                           ));
                         })()}
                       </View>
+                    )}
+                  </View>
+
+                  <View style={styles.membersSection}>
+                    <View style={styles.cardTop}>
+                      <Text accessibilityRole="header" style={[styles.membersTitle, { color: theme.ink }]}>
+                        Tâches
+                      </Text>
+                      {selectedProject.status === 'active' && (role === 'admin' || selectedProject.owner_id === userId) && !showTaskForm && (
+                        <TouchableOpacity
+                          accessibilityRole="button"
+                          accessibilityLabel="Nouvelle tâche"
+                          onPress={() => {
+                            setTaskErrors({});
+                            setTaskError('');
+                            setTaskMessage('');
+                            setShowTaskForm(true);
+                          }}
+                          style={[styles.calendarBtn, { backgroundColor: theme.primary, borderColor: theme.primary }]}
+                        >
+                          <Text style={{ color: theme.onPrimary, fontWeight: '700', fontSize: 14 }}>Nouvelle tâche</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+
+                    {!!taskMessage && (
+                      <Text accessibilityRole="alert" style={[styles.successText, { color: theme.success }]}>{taskMessage}</Text>
+                    )}
+
+                    {showTaskForm && (
+                      <View style={[styles.confirmBox, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                        <Text style={[styles.label, { color: theme.ink }]}>Titre</Text>
+                        <TextInput
+                          accessibilityLabel="Titre de la tâche"
+                          editable={!creatingTask}
+                          value={taskTitle}
+                          onChangeText={(val) => {
+                            setTaskTitle(val);
+                            if (taskErrors.title) setTaskErrors((prev) => ({ ...prev, title: undefined }));
+                          }}
+                          style={[styles.input, { color: theme.ink, backgroundColor: theme.raised, borderColor: taskErrors.title ? theme.danger : theme.border }]}
+                        />
+                        {!!taskErrors.title && <Text accessibilityRole="alert" style={[styles.fieldError, { color: theme.danger }]}>{taskErrors.title}</Text>}
+
+                        <Text style={[styles.label, { color: theme.ink }]}>Échéance (JJ/MM/AAAA)</Text>
+                        <View style={styles.dateRow}>
+                          <TextInput
+                            accessibilityLabel="Échéance de la tâche"
+                            editable={!creatingTask}
+                            keyboardType="number-pad"
+                            maxLength={10}
+                            placeholder="JJ/MM/AAAA"
+                            placeholderTextColor={theme.muted}
+                            value={taskDueDate}
+                            onChangeText={(val) => {
+                              setTaskDueDate(formatDateInput(val));
+                              if (taskErrors.dueDate) setTaskErrors((prev) => ({ ...prev, dueDate: undefined }));
+                            }}
+                            style={[styles.input, styles.dateInput, { color: theme.ink, backgroundColor: theme.raised, borderColor: taskErrors.dueDate ? theme.danger : theme.border }]}
+                          />
+                          <TouchableOpacity
+                            accessibilityRole="button"
+                            onPress={() => setTaskPickerOpen((prev) => !prev)}
+                            style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                          >
+                            <Text style={[styles.calendarBtnText, { color: theme.ink }]}>Calendrier</Text>
+                          </TouchableOpacity>
+                        </View>
+                        {taskPickerOpen && (
+                          <DateTimePicker
+                            value={frStringToDate(taskDueDate)}
+                            mode="date"
+                            minimumDate={new Date()}
+                            display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                            onChange={(_event, selected) => {
+                              if (Platform.OS !== 'ios') setTaskPickerOpen(false);
+                              if (selected) {
+                                setTaskDueDate(dateToFrString(selected));
+                                if (taskErrors.dueDate) setTaskErrors((prev) => ({ ...prev, dueDate: undefined }));
+                              }
+                            }}
+                          />
+                        )}
+                        {!!taskErrors.dueDate && <Text accessibilityRole="alert" style={[styles.fieldError, { color: theme.danger }]}>{taskErrors.dueDate}</Text>}
+
+                        <Text style={[styles.label, { color: theme.ink }]}>Description (facultatif)</Text>
+                        <TextInput
+                          accessibilityLabel="Description de la tâche"
+                          editable={!creatingTask}
+                          multiline
+                          value={taskDescription}
+                          onChangeText={setTaskDescription}
+                          style={[styles.input, styles.textArea, { color: theme.ink, backgroundColor: theme.raised, borderColor: theme.border }]}
+                        />
+
+                        <Text style={[styles.label, { color: theme.ink }]}>Priorité</Text>
+                        <View style={styles.formActions}>
+                          {(['low', 'normal', 'high'] as const).map((prio) => (
+                            <TouchableOpacity
+                              key={prio}
+                              accessibilityRole="button"
+                              onPress={() => setTaskPriority(prio)}
+                              style={[
+                                styles.calendarBtn,
+                                {
+                                  backgroundColor: taskPriority === prio ? theme.primary : theme.subtle,
+                                  borderColor: taskPriority === prio ? theme.primary : theme.border,
+                                },
+                              ]}
+                            >
+                              <Text style={{ color: taskPriority === prio ? theme.onPrimary : theme.ink, fontWeight: '600', fontSize: 14 }}>
+                                {formatTaskPriority(prio)}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+
+                        <Text style={[styles.label, { color: theme.ink }]}>Tags (facultatif, séparés par des virgules)</Text>
+                        <TextInput
+                          accessibilityLabel="Tags"
+                          editable={!creatingTask}
+                          placeholder="urgent, client"
+                          placeholderTextColor={theme.muted}
+                          value={taskTags}
+                          onChangeText={setTaskTags}
+                          style={[styles.input, { color: theme.ink, backgroundColor: theme.raised, borderColor: theme.border }]}
+                        />
+
+                        <Text style={[styles.label, { color: theme.ink }]}>Responsable (facultatif)</Text>
+                        <View style={styles.formActions}>
+                          <TouchableOpacity
+                            accessibilityRole="button"
+                            onPress={() => setTaskAssigneeId(null)}
+                            style={[
+                              styles.calendarBtn,
+                              {
+                                backgroundColor: taskAssigneeId === null ? theme.primary : theme.subtle,
+                                borderColor: taskAssigneeId === null ? theme.primary : theme.border,
+                              },
+                            ]}
+                          >
+                            <Text style={{ color: taskAssigneeId === null ? theme.onPrimary : theme.ink, fontWeight: '600', fontSize: 14 }}>
+                              Aucun
+                            </Text>
+                          </TouchableOpacity>
+                          {assignables.map((person) => (
+                            <TouchableOpacity
+                              key={person.id}
+                              accessibilityRole="button"
+                              onPress={() => setTaskAssigneeId(person.id)}
+                              style={[
+                                styles.calendarBtn,
+                                {
+                                  backgroundColor: taskAssigneeId === person.id ? theme.primary : theme.subtle,
+                                  borderColor: taskAssigneeId === person.id ? theme.primary : theme.border,
+                                },
+                              ]}
+                            >
+                              <Text style={{ color: taskAssigneeId === person.id ? theme.onPrimary : theme.ink, fontWeight: '600', fontSize: 14 }}>
+                                {person.first_name} {person.last_name}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+
+                        {!!taskError && <Text accessibilityRole="alert" style={[styles.fieldError, { color: theme.danger }]}>{taskError}</Text>}
+
+                        <View style={styles.formActions}>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Enregistrer la tâche"
+                            disabled={creatingTask}
+                            onPress={() => createTask(selectedProject)}
+                            style={[styles.primaryBtn, { backgroundColor: theme.primary, opacity: creatingTask ? 0.7 : 1 }]}
+                          >
+                            {creatingTask ? <ActivityIndicator color={theme.onPrimary} /> : <Text style={{ color: theme.onPrimary, fontWeight: '700', fontSize: 15 }}>Créer la tâche</Text>}
+                          </Pressable>
+                          <TouchableOpacity
+                            accessibilityRole="button"
+                            disabled={creatingTask}
+                            onPress={() => {
+                              setShowTaskForm(false);
+                              setTaskTitle('');
+                              setTaskDescription('');
+                              setTaskDueDate('');
+                              setTaskPriority('normal');
+                              setTaskTags('');
+                              setTaskAssigneeId(null);
+                              setTaskErrors({});
+                              setTaskError('');
+                              setTaskPickerOpen(false);
+                            }}
+                            style={[styles.headerBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                          >
+                            <Text style={[styles.headerBtnText, { color: theme.ink }]}>Annuler</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    )}
+
+                    {tasks.length === 0 ? (
+                      <Text style={[styles.metaText, { color: theme.muted }]}>Aucune tâche pour le moment.</Text>
+                    ) : (
+                      tasks.map((task) => {
+                        const assignee = assignables.find((a) => a.id === task.assignee_id);
+                        return (
+                          <View
+                            key={task.id}
+                            style={[styles.memberRow, { backgroundColor: theme.surface, borderColor: theme.border, flexDirection: 'column', alignItems: 'flex-start', gap: 4 }]}
+                          >
+                            <Text style={[styles.memberName, { color: theme.ink }]}>{task.title}</Text>
+                            <Text style={[styles.metaText, { color: theme.muted }]}>
+                              Statut : {formatTaskStatus(task.status)} · Priorité : {formatTaskPriority(task.priority)} · Échéance : {formatDateFr(task.due_date)}
+                            </Text>
+                            <Text style={[styles.metaText, { color: theme.muted }]}>
+                              Responsable : {assignee ? `${assignee.first_name} ${assignee.last_name}` : 'Non attribuée'}
+                            </Text>
+                            {task.tags.length > 0 && (
+                              <Text style={[styles.metaText, { color: theme.muted }]}>
+                                Tags : {task.tags.join(', ')}
+                              </Text>
+                            )}
+                          </View>
+                        );
+                      })
                     )}
                   </View>
                 </View>
