@@ -192,6 +192,17 @@ export default function Projects() {
   const [taskError, setTaskError] = useState('');
   const [taskStatusBusyId, setTaskStatusBusyId] = useState<string | null>(null);
 
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editTaskTitle, setEditTaskTitle] = useState('');
+  const [editTaskDescription, setEditTaskDescription] = useState('');
+  const [editTaskDueDate, setEditTaskDueDate] = useState('');
+  const [editTaskPriority, setEditTaskPriority] = useState<TaskRow['priority']>('normal');
+  const [editTaskTags, setEditTaskTags] = useState('');
+  const [editTaskAssigneeId, setEditTaskAssigneeId] = useState<string | null>(null);
+  const [editTaskPickerOpen, setEditTaskPickerOpen] = useState(false);
+  const [editTaskErrors, setEditTaskErrors] = useState<TaskFormErrors>({});
+  const [savingTaskEdit, setSavingTaskEdit] = useState(false);
+
   const verifyAndLoad = useCallback(async () => {
     const seq = ++checkSeqRef.current;
     try {
@@ -729,6 +740,100 @@ export default function Projects() {
       setTaskError('Impossible de créer la tâche. Vérifiez votre connexion, puis réessayez.');
     } finally {
       if (mountedRef.current) setCreatingTask(false);
+    }
+  }
+
+  function startEditingTask(task: TaskRow) {
+    setEditingTaskId(task.id);
+    setEditTaskTitle(task.title);
+    setEditTaskDescription(task.description ?? '');
+    setEditTaskDueDate(dateToFrString(new Date(`${task.due_date}T00:00:00`)));
+    setEditTaskPriority(task.priority);
+    setEditTaskTags(task.tags.join(', '));
+    setEditTaskAssigneeId(task.assignee_id);
+    setEditTaskPickerOpen(false);
+    setEditTaskErrors({});
+    setTaskError('');
+    setTaskMessage('');
+  }
+
+  async function saveTaskEdit(task: TaskRow) {
+    if (savingTaskEdit || signingOut) return;
+    const errors: TaskFormErrors = {};
+    const trimmedTitle = editTaskTitle.trim();
+    const dueIso = parseFrDateToIso(editTaskDueDate.trim());
+    if (!trimmedTitle) {
+      errors.title = 'Saisissez le titre de la tâche.';
+    } else if (trimmedTitle.length > 150) {
+      errors.title = 'Le titre ne doit pas dépasser 150 caractères.';
+    }
+    if (!dueIso) {
+      errors.dueDate = 'Saisissez une date d’échéance valide (JJ/MM/AAAA).';
+    }
+    setEditTaskErrors(errors);
+    setTaskError('');
+    if (Object.keys(errors).length > 0) return;
+
+    const parsedTags = editTaskTags
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean);
+
+    setSavingTaskEdit(true);
+    try {
+      const { data: updated, error } = await supabase
+        .from('tasks')
+        .update({
+          title: trimmedTitle,
+          description: editTaskDescription.trim() || null,
+          priority: editTaskPriority,
+          due_date: dueIso!,
+          tags: parsedTags,
+          assignee_id: editTaskAssigneeId,
+        })
+        .eq('id', task.id)
+        .select('id, project_id, title, description, status, priority, due_date, tags, assignee_id')
+        .single();
+
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error || !updated) {
+        setTaskError('Impossible de modifier cette tâche.');
+        return;
+      }
+      setTasks((prev) => prev.map((t) => (t.id === task.id ? (updated as TaskRow) : t)));
+      setEditingTaskId(null);
+      setTaskMessage('Les modifications de la tâche ont été enregistrées.');
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setTaskError('Impossible de modifier cette tâche.');
+    } finally {
+      if (mountedRef.current) setSavingTaskEdit(false);
+    }
+  }
+
+  async function reopenDoneTask(task: TaskRow) {
+    if (taskStatusBusyId || signingOut) return;
+    setTaskStatusBusyId(task.id);
+    setTaskError('');
+    setTaskMessage('');
+    try {
+      const { data: confirmedStatus, error } = await supabase.rpc('reopen_done_task', {
+        p_task_id: task.id,
+      });
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error || !confirmedStatus) {
+        setTaskError('Impossible de remettre cette tâche en cours.');
+        return;
+      }
+      setTasks((prev) =>
+        prev.map((t) => (t.id === task.id ? { ...t, status: 'in_progress' } : t))
+      );
+      setTaskMessage('La tâche est repassée En cours et peut maintenant être modifiée.');
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setTaskError('Impossible de remettre cette tâche en cours.');
+    } finally {
+      if (mountedRef.current) setTaskStatusBusyId(null);
     }
   }
 
@@ -1650,7 +1755,7 @@ export default function Projects() {
                                     </TouchableOpacity>
                                   </>
                                 )}
-                                {task.status === 'done' && (
+                                {task.status === 'done' && task.assignee_id === userId && (
                                   <TouchableOpacity
                                     accessibilityRole="button"
                                     disabled={taskStatusBusyId === task.id}
@@ -1660,6 +1765,182 @@ export default function Projects() {
                                     <Text style={{ color: theme.primary, fontWeight: '600', fontSize: 13 }}>Remettre en cours</Text>
                                   </TouchableOpacity>
                                 )}
+                              </View>
+                            )}
+                            {selectedProject.status === 'active' && (role === 'admin' || selectedProject.owner_id === userId) && editingTaskId !== task.id && (
+                              <View style={[styles.formActions, { marginTop: 6 }]}>
+                                {task.status !== 'done' ? (
+                                  <TouchableOpacity
+                                    accessibilityRole="button"
+                                    onPress={() => startEditingTask(task)}
+                                    style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                                  >
+                                    <Text style={{ color: theme.ink, fontWeight: '600', fontSize: 13 }}>Modifier</Text>
+                                  </TouchableOpacity>
+                                ) : (
+                                  <>
+                                    <Text style={[styles.metaText, { color: theme.muted }]}>
+                                      Champs verrouillés (tâche terminée)
+                                    </Text>
+                                    {task.assignee_id !== userId && (
+                                      <TouchableOpacity
+                                        accessibilityRole="button"
+                                        disabled={taskStatusBusyId === task.id}
+                                        onPress={() => reopenDoneTask(task)}
+                                        style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.primary }]}
+                                      >
+                                        <Text style={{ color: theme.primary, fontWeight: '600', fontSize: 13 }}>Remettre en cours</Text>
+                                      </TouchableOpacity>
+                                    )}
+                                  </>
+                                )}
+                              </View>
+                            )}
+                            {editingTaskId === task.id && (
+                              <View style={[styles.confirmBox, { width: '100%', backgroundColor: theme.raised, borderColor: theme.border }]}>
+                                <Text style={[styles.label, { color: theme.ink }]}>Titre</Text>
+                                <TextInput
+                                  editable={!savingTaskEdit}
+                                  value={editTaskTitle}
+                                  onChangeText={(val) => {
+                                    setEditTaskTitle(val);
+                                    if (editTaskErrors.title) setEditTaskErrors((prev) => ({ ...prev, title: undefined }));
+                                  }}
+                                  style={[styles.input, { color: theme.ink, backgroundColor: theme.surface, borderColor: editTaskErrors.title ? theme.danger : theme.border }]}
+                                />
+                                {!!editTaskErrors.title && <Text style={[styles.fieldError, { color: theme.danger }]}>{editTaskErrors.title}</Text>}
+
+                                <Text style={[styles.label, { color: theme.ink }]}>Échéance (JJ/MM/AAAA)</Text>
+                                <View style={styles.dateRow}>
+                                  <TextInput
+                                    editable={!savingTaskEdit}
+                                    keyboardType="number-pad"
+                                    maxLength={10}
+                                    value={editTaskDueDate}
+                                    onChangeText={(val) => {
+                                      setEditTaskDueDate(formatDateInput(val));
+                                      if (editTaskErrors.dueDate) setEditTaskErrors((prev) => ({ ...prev, dueDate: undefined }));
+                                    }}
+                                    style={[styles.input, styles.dateInput, { color: theme.ink, backgroundColor: theme.surface, borderColor: editTaskErrors.dueDate ? theme.danger : theme.border }]}
+                                  />
+                                  <TouchableOpacity
+                                    accessibilityRole="button"
+                                    onPress={() => setEditTaskPickerOpen((prev) => !prev)}
+                                    style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                                  >
+                                    <Text style={[styles.calendarBtnText, { color: theme.ink }]}>Calendrier</Text>
+                                  </TouchableOpacity>
+                                </View>
+                                {editTaskPickerOpen && (
+                                  <DateTimePicker
+                                    value={frStringToDate(editTaskDueDate)}
+                                    mode="date"
+                                    display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                                    onChange={(_event, selected) => {
+                                      if (Platform.OS !== 'ios') setEditTaskPickerOpen(false);
+                                      if (selected) {
+                                        setEditTaskDueDate(dateToFrString(selected));
+                                        if (editTaskErrors.dueDate) setEditTaskErrors((prev) => ({ ...prev, dueDate: undefined }));
+                                      }
+                                    }}
+                                  />
+                                )}
+                                {!!editTaskErrors.dueDate && <Text style={[styles.fieldError, { color: theme.danger }]}>{editTaskErrors.dueDate}</Text>}
+
+                                <Text style={[styles.label, { color: theme.ink }]}>Description (facultatif)</Text>
+                                <TextInput
+                                  editable={!savingTaskEdit}
+                                  multiline
+                                  value={editTaskDescription}
+                                  onChangeText={setEditTaskDescription}
+                                  style={[styles.input, styles.textArea, { color: theme.ink, backgroundColor: theme.surface, borderColor: theme.border }]}
+                                />
+
+                                <Text style={[styles.label, { color: theme.ink }]}>Priorité</Text>
+                                <View style={styles.formActions}>
+                                  {(['low', 'normal', 'high'] as const).map((prio) => (
+                                    <TouchableOpacity
+                                      key={prio}
+                                      accessibilityRole="button"
+                                      onPress={() => setEditTaskPriority(prio)}
+                                      style={[
+                                        styles.calendarBtn,
+                                        {
+                                          backgroundColor: editTaskPriority === prio ? theme.primary : theme.subtle,
+                                          borderColor: editTaskPriority === prio ? theme.primary : theme.border,
+                                        },
+                                      ]}
+                                    >
+                                      <Text style={{ color: editTaskPriority === prio ? theme.onPrimary : theme.ink, fontWeight: '600', fontSize: 13 }}>
+                                        {formatTaskPriority(prio)}
+                                      </Text>
+                                    </TouchableOpacity>
+                                  ))}
+                                </View>
+
+                                <Text style={[styles.label, { color: theme.ink }]}>Tags (facultatif, séparés par des virgules)</Text>
+                                <TextInput
+                                  editable={!savingTaskEdit}
+                                  value={editTaskTags}
+                                  onChangeText={setEditTaskTags}
+                                  style={[styles.input, { color: theme.ink, backgroundColor: theme.surface, borderColor: theme.border }]}
+                                />
+
+                                <Text style={[styles.label, { color: theme.ink }]}>Responsable</Text>
+                                <View style={styles.formActions}>
+                                  <TouchableOpacity
+                                    accessibilityRole="button"
+                                    onPress={() => setEditTaskAssigneeId(null)}
+                                    style={[
+                                      styles.calendarBtn,
+                                      {
+                                        backgroundColor: editTaskAssigneeId === null ? theme.primary : theme.subtle,
+                                        borderColor: editTaskAssigneeId === null ? theme.primary : theme.border,
+                                      },
+                                    ]}
+                                  >
+                                    <Text style={{ color: editTaskAssigneeId === null ? theme.onPrimary : theme.ink, fontWeight: '600', fontSize: 13 }}>
+                                      Aucun
+                                    </Text>
+                                  </TouchableOpacity>
+                                  {assignables.map((person) => (
+                                    <TouchableOpacity
+                                      key={person.id}
+                                      accessibilityRole="button"
+                                      onPress={() => setEditTaskAssigneeId(person.id)}
+                                      style={[
+                                        styles.calendarBtn,
+                                        {
+                                          backgroundColor: editTaskAssigneeId === person.id ? theme.primary : theme.subtle,
+                                          borderColor: editTaskAssigneeId === person.id ? theme.primary : theme.border,
+                                        },
+                                      ]}
+                                    >
+                                      <Text style={{ color: editTaskAssigneeId === person.id ? theme.onPrimary : theme.ink, fontWeight: '600', fontSize: 13 }}>
+                                        {person.first_name} {person.last_name}
+                                      </Text>
+                                    </TouchableOpacity>
+                                  ))}
+                                </View>
+
+                                <View style={styles.formActions}>
+                                  <Pressable
+                                    accessibilityRole="button"
+                                    disabled={savingTaskEdit}
+                                    onPress={() => saveTaskEdit(task)}
+                                    style={[styles.primaryBtn, { backgroundColor: theme.primary, opacity: savingTaskEdit ? 0.7 : 1 }]}
+                                  >
+                                    {savingTaskEdit ? <ActivityIndicator color={theme.onPrimary} /> : <Text style={{ color: theme.onPrimary, fontWeight: '700', fontSize: 14 }}>Enregistrer</Text>}
+                                  </Pressable>
+                                  <TouchableOpacity
+                                    accessibilityRole="button"
+                                    disabled={savingTaskEdit}
+                                    onPress={() => setEditingTaskId(null)}
+                                    style={[styles.headerBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                                  >
+                                    <Text style={[styles.headerBtnText, { color: theme.ink }]}>Annuler</Text>
+                                  </TouchableOpacity>
+                                </View>
                               </View>
                             )}
                           </View>
