@@ -49,6 +49,7 @@ type TaskRow = {
   due_date: string;
   tags: string[];
   assignee_id: string | null;
+  has_started: boolean;
 };
 
 type TaskFormErrors = { title?: string; dueDate?: string };
@@ -204,6 +205,7 @@ export default function Projects() {
   const [editTaskErrors, setEditTaskErrors] = useState<TaskFormErrors>({});
   const [savingTaskEdit, setSavingTaskEdit] = useState(false);
   const [confirmCancelTaskId, setConfirmCancelTaskId] = useState<string | null>(null);
+  const [confirmDeleteTaskId, setConfirmDeleteTaskId] = useState<string | null>(null);
 
   const verifyAndLoad = useCallback(async () => {
     const seq = ++checkSeqRef.current;
@@ -494,7 +496,7 @@ export default function Projects() {
 
       const { data: taskRows } = await supabase
         .from('tasks')
-        .select('id, project_id, title, description, status, priority, due_date, tags, assignee_id')
+        .select('id, project_id, title, description, status, priority, due_date, tags, assignee_id, has_started')
         .eq('project_id', projectId)
         .order('created_at', { ascending: false });
       if (!mountedRef.current || signingOutRef.current) return;
@@ -718,7 +720,7 @@ export default function Projects() {
           assignee_id: taskAssigneeId,
           created_by: userId,
         })
-        .select('id, project_id, title, description, status, priority, due_date, tags, assignee_id')
+        .select('id, project_id, title, description, status, priority, due_date, tags, assignee_id, has_started')
         .single();
 
       if (!mountedRef.current || signingOutRef.current) return;
@@ -794,7 +796,7 @@ export default function Projects() {
           assignee_id: editTaskAssigneeId,
         })
         .eq('id', task.id)
-        .select('id, project_id, title, description, status, priority, due_date, tags, assignee_id')
+        .select('id, project_id, title, description, status, priority, due_date, tags, assignee_id, has_started')
         .single();
 
       if (!mountedRef.current || signingOutRef.current) return;
@@ -834,6 +836,29 @@ export default function Projects() {
     } catch {
       if (!mountedRef.current || signingOutRef.current) return;
       setTaskError('Impossible de remettre cette tâche en cours.');
+    } finally {
+      if (mountedRef.current) setTaskStatusBusyId(null);
+    }
+  }
+
+  async function deleteVirginTask(task: TaskRow) {
+    if (taskStatusBusyId || signingOut) return;
+    setTaskStatusBusyId(task.id);
+    setTaskError('');
+    setTaskMessage('');
+    try {
+      const { error } = await supabase.rpc('delete_virgin_task', { p_task_id: task.id });
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error) {
+        setTaskError('Impossible de supprimer cette tâche.');
+        return;
+      }
+      setTasks((prev) => prev.filter((t) => t.id !== task.id));
+      setConfirmDeleteTaskId(null);
+      setTaskMessage('La tâche a été supprimée.');
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setTaskError('Impossible de supprimer cette tâche.');
     } finally {
       if (mountedRef.current) setTaskStatusBusyId(null);
     }
@@ -1867,8 +1892,43 @@ export default function Projects() {
                                     >
                                       <Text style={{ color: theme.danger, fontWeight: '600', fontSize: 13 }}>Annuler</Text>
                                     </TouchableOpacity>
+                                    {task.status === 'created' && !task.has_started && (
+                                      <TouchableOpacity
+                                        accessibilityRole="button"
+                                        disabled={taskStatusBusyId === task.id}
+                                        onPress={() => setConfirmDeleteTaskId(task.id)}
+                                        style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.danger }]}
+                                      >
+                                        <Text style={{ color: theme.danger, fontWeight: '600', fontSize: 13 }}>Supprimer</Text>
+                                      </TouchableOpacity>
+                                    )}
                                   </>
                                 )}
+                              </View>
+                            )}
+                            {confirmDeleteTaskId === task.id && task.status === 'created' && !task.has_started && (
+                              <View style={[styles.confirmBox, { width: '100%', backgroundColor: theme.surface, borderColor: theme.danger }]}>
+                                <Text style={[styles.confirmText, { color: theme.ink }]}>
+                                  Supprimer définitivement cette tâche ? Cette action est irréversible.
+                                </Text>
+                                <View style={styles.formActions}>
+                                  <TouchableOpacity
+                                    accessibilityRole="button"
+                                    disabled={taskStatusBusyId === task.id}
+                                    onPress={() => deleteVirginTask(task)}
+                                    style={[styles.calendarBtn, { backgroundColor: theme.danger, borderColor: theme.danger }]}
+                                  >
+                                    <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Confirmer la suppression</Text>
+                                  </TouchableOpacity>
+                                  <TouchableOpacity
+                                    accessibilityRole="button"
+                                    disabled={taskStatusBusyId === task.id}
+                                    onPress={() => setConfirmDeleteTaskId(null)}
+                                    style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                                  >
+                                    <Text style={[styles.calendarBtnText, { color: theme.ink }]}>Retour</Text>
+                                  </TouchableOpacity>
+                                </View>
                               </View>
                             )}
                             {confirmCancelTaskId === task.id && task.status !== 'cancelled' && (
