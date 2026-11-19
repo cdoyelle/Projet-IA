@@ -199,6 +199,8 @@ export default function Projects() {
   const [statusBusy, setStatusBusy] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState('');
 
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [assignables, setAssignables] = useState<ActiveCandidate[]>([]);
@@ -306,14 +308,16 @@ export default function Projects() {
 
       if (projectsError) {
         setLoadError('Impossible de charger vos projets. Vérifiez votre connexion, puis réessayez.');
+        return false;
       } else {
         const list = (rows ?? []) as ProjectRow[];
         setProjects(list);
         setLoadError('');
         setSelectedId((prev) => (prev && list.some((p) => p.id === prev) ? prev : list[0]?.id ?? null));
+        return true;
       }
     } catch {
-      if (hasVerifiedRef.current) return;
+      if (hasVerifiedRef.current) return false;
       try { await supabase.auth.signOut(); } catch { /* ignore */ }
       if (mountedRef.current && !signingOutRef.current && seq === checkSeqRef.current) {
         hasVerifiedRef.current = false;
@@ -1161,12 +1165,28 @@ export default function Projects() {
   async function refreshAll() {
     if (refreshing || signingOut) return;
     setRefreshing(true);
+    setRefreshError('');
     try {
-      await verifyAndLoad();
+      const ok = await verifyAndLoad();
+      if (!ok) {
+        if (mountedRef.current) {
+          setRefreshError('Actualisation impossible (données affichées potentiellement anciennes).');
+        }
+        return;
+      }
       if (selectedId) {
         const proj = projects.find((p) => p.id === selectedId);
         const canManage = !!proj && proj.status === 'active' && (role === 'admin' || proj.owner_id === userId);
         await loadMembersForProject(selectedId, canManage);
+      }
+      if (mountedRef.current) {
+        setLastUpdatedAt(
+          new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        );
+      }
+    } catch {
+      if (mountedRef.current) {
+        setRefreshError('Actualisation impossible (données affichées potentiellement anciennes).');
       }
     } finally {
       if (mountedRef.current) setRefreshing(false);
@@ -1405,6 +1425,26 @@ export default function Projects() {
 
           {!!loadError && (
             <Text accessibilityRole="alert" style={[styles.errorText, { color: theme.danger }]}>{loadError}</Text>
+          )}
+
+          {!!refreshError && (
+            <View style={[styles.confirmBox, { backgroundColor: theme.surface, borderColor: theme.danger }]}>
+              <Text accessibilityRole="alert" style={[styles.fieldError, { color: theme.danger }]}>{refreshError}</Text>
+              <TouchableOpacity
+                accessibilityRole="button"
+                disabled={refreshing}
+                onPress={refreshAll}
+                style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.primary, alignSelf: 'flex-start' }]}
+              >
+                <Text style={{ color: theme.primary, fontWeight: '600', fontSize: 13 }}>Réessayer</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {!!lastUpdatedAt && (
+            <Text style={[styles.metaText, { color: theme.muted }]}>
+              Dernière mise à jour : {lastUpdatedAt}
+            </Text>
           )}
 
           {projects.length === 0 && !loadError ? (
