@@ -161,6 +161,8 @@ export default function Projects() {
   const [redirectHref, setRedirectHref] = useState<Href>('/sign-in?reason=expired');
   const [signingOut, setSigningOut] = useState(false);
   const [role, setRole] = useState<UserRole>('member');
+  const [canCreateProjects, setCanCreateProjects] = useState(false);
+  const [canCreateTasks, setCanCreateTasks] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -275,7 +277,7 @@ export default function Projects() {
 
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('role, active')
+        .select('role, active, can_create_projects, can_create_tasks')
         .eq('id', data.session.user.id)
         .maybeSingle();
 
@@ -303,6 +305,8 @@ export default function Projects() {
       hasVerifiedRef.current = true;
       setUserId(data.session.user.id);
       setRole(validRole);
+      setCanCreateProjects(profile.can_create_projects === true);
+      setCanCreateTasks(profile.can_create_tasks === true);
       setAuthorized(true);
       setChecking(false);
 
@@ -1250,7 +1254,7 @@ export default function Projects() {
                   {refreshing ? 'Actualisation...' : 'Actualiser'}
                 </Text>
               </TouchableOpacity>
-              {(role === 'admin' || role === 'owner') && (
+              {(role === 'admin' || role === 'owner' || canCreateProjects) && (
                 <TouchableOpacity
                   accessibilityRole="button"
                   accessibilityLabel="Nouveau projet"
@@ -1833,7 +1837,7 @@ export default function Projects() {
                       <Text accessibilityRole="header" style={[styles.membersTitle, { color: theme.ink }]}>
                         Tâches
                       </Text>
-                      {selectedProject.status === 'active' && (role === 'admin' || selectedProject.owner_id === userId) && !showTaskForm && (
+                      {selectedProject.status === 'active' && (role === 'admin' || selectedProject.owner_id === userId || canCreateTasks) && !showTaskForm && (
                         <TouchableOpacity
                           accessibilityRole="button"
                           accessibilityLabel="Nouvelle tâche"

@@ -27,6 +27,8 @@ export interface AdminAccountSummary {
   last_name: string;
   role: 'admin' | 'owner' | 'member';
   active: boolean;
+  can_create_projects: boolean;
+  can_create_tasks: boolean;
 }
 
 export interface ListDemoAccountsSuccess {

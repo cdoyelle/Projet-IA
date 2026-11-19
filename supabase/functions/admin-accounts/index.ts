@@ -75,7 +75,7 @@ Deno.serve(async (request) => {
   if (request.method === 'GET') {
     const { data: accounts, error: listError } = await admin
       .from('profiles')
-      .select('id, first_name, last_name, role, active')
+      .select('id, first_name, last_name, role, active, can_create_projects, can_create_tasks')
       .order('created_at', { ascending: false });
     if (listError) return response({ code: 'SERVER_ERROR' }, 500);
     return response({ accounts: accounts ?? [] }, 200);
@@ -113,10 +113,31 @@ Deno.serve(async (request) => {
   if (input.action === 'list') {
     const { data: accounts, error: listError } = await admin
       .from('profiles')
-      .select('id, first_name, last_name, role, active')
+      .select('id, first_name, last_name, role, active, can_create_projects, can_create_tasks')
       .order('created_at', { ascending: false });
     if (listError) return response({ code: 'SERVER_ERROR' }, 500);
     return response({ accounts: accounts ?? [] }, 200);
+  }
+
+  if (input.action === 'toggle_rights') {
+    const userId = typeof input.userId === 'string' ? input.userId.trim() : '';
+    const canCreateProjects = typeof input.can_create_projects === 'boolean' ? input.can_create_projects : undefined;
+    const canCreateTasks = typeof input.can_create_tasks === 'boolean' ? input.can_create_tasks : undefined;
+    if (!userId || (canCreateProjects === undefined && canCreateTasks === undefined)) {
+      return response({ code: 'VALIDATION_ERROR' }, 400);
+    }
+    const patch: Record<string, boolean> = {};
+    if (canCreateProjects !== undefined) patch.can_create_projects = canCreateProjects;
+    if (canCreateTasks !== undefined) patch.can_create_tasks = canCreateTasks;
+    const { data: updated, error: updateError } = await admin
+      .from('profiles')
+      .update(patch)
+      .eq('id', userId)
+      .select('id, can_create_projects, can_create_tasks')
+      .maybeSingle();
+    if (updateError) return response({ code: 'SERVER_ERROR' }, 500);
+    if (!updated) return response({ code: 'NOT_FOUND' }, 404);
+    return response(updated, 200);
   }
 
   if (input.action === 'toggle') {

@@ -268,6 +268,41 @@ export default function Accounts() {
     }
   }
 
+  async function toggleCreationRight(
+    account: AdminAccountSummary,
+    field: 'can_create_projects' | 'can_create_tasks'
+  ) {
+    if (togglingId || signingOut) return;
+    setTogglingId(account.id);
+    setAccountsError('');
+    try {
+      const nextValue = !account[field];
+      const { data, error, response } = await supabase.functions.invoke<
+        { id?: string; can_create_projects?: boolean; can_create_tasks?: boolean } & Partial<EdgeErrorResponse>
+      >('admin-accounts', {
+        body: { action: 'toggle_rights', userId: account.id, [field]: nextValue },
+      });
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error || typeof data?.[field] !== 'boolean') {
+        const code = data?.code ?? await readFunctionErrorCode(error, response);
+        if (code === 'FORBIDDEN' || code === 'AUTH_REQUIRED') {
+          await verifyAccess();
+          return;
+        }
+        setAccountsError('Impossible de modifier les droits du compte.');
+        return;
+      }
+      setAccounts((prev) =>
+        prev.map((item) => (item.id === account.id ? { ...item, [field]: data[field]! } : item))
+      );
+    } catch {
+      if (!mountedRef.current || signingOutRef.current) return;
+      setAccountsError('Impossible de modifier les droits du compte.');
+    } finally {
+      if (mountedRef.current) setTogglingId(null);
+    }
+  }
+
   async function createAccount() {
     if (loading || signingOut) return;
     const errors: FieldErrors = {};
@@ -587,6 +622,44 @@ export default function Accounts() {
                       <Text style={[styles.accountMeta, { color: theme.muted }]}>
                         {account.role === 'admin' ? 'Administrateur' : account.role === 'owner' ? 'Responsable' : 'Membre'} · {account.active ? 'Actif' : 'Désactivé'}
                       </Text>
+                      {account.role !== 'admin' && (
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                          <TouchableOpacity
+                            accessibilityRole="button"
+                            disabled={isBusy || signingOut}
+                            onPress={() => toggleCreationRight(account, 'can_create_projects')}
+                            style={[
+                              styles.toggleButton,
+                              {
+                                backgroundColor: theme.subtle,
+                                borderColor: account.can_create_projects ? theme.primary : theme.border,
+                                opacity: isBusy ? 0.6 : 1,
+                              },
+                            ]}
+                          >
+                            <Text style={{ color: account.can_create_projects ? theme.primary : theme.muted, fontWeight: '600', fontSize: 12 }}>
+                              Créer projets : {account.can_create_projects ? 'Oui' : 'Non'}
+                            </Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            accessibilityRole="button"
+                            disabled={isBusy || signingOut}
+                            onPress={() => toggleCreationRight(account, 'can_create_tasks')}
+                            style={[
+                              styles.toggleButton,
+                              {
+                                backgroundColor: theme.subtle,
+                                borderColor: account.can_create_tasks ? theme.primary : theme.border,
+                                opacity: isBusy ? 0.6 : 1,
+                              },
+                            ]}
+                          >
+                            <Text style={{ color: account.can_create_tasks ? theme.primary : theme.muted, fontWeight: '600', fontSize: 12 }}>
+                              Créer tâches : {account.can_create_tasks ? 'Oui' : 'Non'}
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
                     </View>
                     {!isSelf && (
                       <TouchableOpacity
