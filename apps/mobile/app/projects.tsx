@@ -17,6 +17,10 @@ type ProjectRow = {
   due_date: string | null;
   closed_at: string | null;
   owner_id: string;
+  created_at?: string;
+  owner_name?: string;
+  task_count?: number;
+  done_count?: number;
 };
 
 function formatProjectStatus(status: ProjectRow['status']): string {
@@ -295,10 +299,7 @@ export default function Projects() {
       }
 
       const validRole: UserRole = profile.role === 'admin' || profile.role === 'owner' ? profile.role : 'member';
-      const { data: rows, error: projectsError } = await supabase
-        .from('projects')
-        .select('id, name, description, status, start_date, due_date, closed_at, owner_id')
-        .order('created_at', { ascending: false });
+      const { data: rows, error: projectsError } = await supabase.rpc('list_accessible_projects');
 
       if (!mountedRef.current || signingOutRef.current || seq !== checkSeqRef.current) return;
 
@@ -1493,9 +1494,21 @@ export default function Projects() {
                           </Text>
                         </View>
                       </View>
-                      <Text style={[styles.metaText, { color: theme.muted }]}>
-                        Progression : 0 % · 0 tâche
-                      </Text>
+                      {(() => {
+                        const isCurrent = project.id === selectedId;
+                        const activeTasks = isCurrent
+                          ? tasks.filter((t) => t.status !== 'cancelled').length
+                          : Number(project.task_count ?? 0);
+                        const doneTasks = isCurrent
+                          ? tasks.filter((t) => t.status === 'done').length
+                          : Number(project.done_count ?? 0);
+                        const pct = activeTasks > 0 ? Math.round((doneTasks / activeTasks) * 100) : 0;
+                        return (
+                          <Text style={[styles.metaText, { color: theme.muted }]}>
+                            Progression : {pct} % · {activeTasks} tâche{activeTasks > 1 ? 's' : ''}
+                          </Text>
+                        );
+                      })()}
                       <Text style={[styles.metaText, { color: theme.muted }]}>
                         {project.due_date ? `Échéance : ${formatDateFr(project.due_date)}` : `Début : ${formatDateFr(project.start_date)}`}
                       </Text>
@@ -1509,9 +1522,21 @@ export default function Projects() {
                   <Text accessibilityRole="header" style={[styles.detailTitle, { color: theme.ink }]}>
                     {selectedProject.name}
                   </Text>
-                  <Text style={[styles.detailMeta, { color: theme.muted }]}>
-                    Statut : {formatProjectStatus(selectedProject.status)} · Progression : 0 % · 0 tâche
-                  </Text>
+                  {!!selectedProject.created_at && (
+                    <Text style={[styles.detailMeta, { color: theme.muted }]}>
+                      Créé par {selectedProject.owner_name || 'Propriétaire'}, le {formatDateFr(selectedProject.created_at.slice(0, 10))}
+                    </Text>
+                  )}
+                  {(() => {
+                    const activeTasks = tasks.filter((t) => t.status !== 'cancelled').length;
+                    const doneTasks = tasks.filter((t) => t.status === 'done').length;
+                    const pct = activeTasks > 0 ? Math.round((doneTasks / activeTasks) * 100) : 0;
+                    return (
+                      <Text style={[styles.detailMeta, { color: theme.muted }]}>
+                        Statut : {formatProjectStatus(selectedProject.status)} · Progression : {pct} % · {activeTasks} tâche{activeTasks > 1 ? 's' : ''}
+                      </Text>
+                    );
+                  })()}
                   <Text style={[styles.detailMeta, { color: theme.muted }]}>
                     Début : {formatDateFr(selectedProject.start_date)}
                     {selectedProject.due_date ? ` · Échéance : ${formatDateFr(selectedProject.due_date)}` : ''}
