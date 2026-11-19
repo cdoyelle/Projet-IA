@@ -53,6 +53,16 @@ type TaskRow = {
   created_at: string;
 };
 
+type ProjectComment = {
+  id: string;
+  project_id: string;
+  author_id: string;
+  author_name: string;
+  content: string;
+  created_at: string;
+  updated_at: string | null;
+};
+
 type TaskFormErrors = { title?: string; dueDate?: string };
 
 function formatTaskStatus(status: TaskRow['status']): string {
@@ -216,6 +226,13 @@ export default function Projects() {
   const [filterDue, setFilterDue] = useState<'all' | 'overdue' | 'today' | 'upcoming'>('all');
   const [sortBy, setSortBy] = useState<'due_date' | 'priority' | 'created_at' | 'title'>('created_at');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+  const [projectComments, setProjectComments] = useState<ProjectComment[]>([]);
+  const [newCommentText, setNewCommentText] = useState('');
+  const [commentBusy, setCommentBusy] = useState(false);
+  const [commentError, setCommentError] = useState('');
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editCommentText, setEditCommentText] = useState('');
 
   const verifyAndLoad = useCallback(async () => {
     const seq = ++checkSeqRef.current;
@@ -517,6 +534,12 @@ export default function Projects() {
       });
       if (!mountedRef.current || signingOutRef.current) return;
       setAssignables((assignRows ?? []) as ActiveCandidate[]);
+
+      const { data: commentRows } = await supabase.rpc('list_project_comments', {
+        p_project_id: projectId,
+      });
+      if (!mountedRef.current || signingOutRef.current) return;
+      setProjectComments((commentRows ?? []) as ProjectComment[]);
     } catch {
       if (!mountedRef.current || signingOutRef.current) return;
       setMemberError('Impossible de charger les membres du projet.');
@@ -950,6 +973,84 @@ export default function Projects() {
       setTaskError('Impossible de mettre à jour le statut de la tâche.');
     } finally {
       if (mountedRef.current) setTaskStatusBusyId(null);
+    }
+  }
+
+  async function addProjectComment(projectId: string) {
+    if (commentBusy || signingOut || !userId) return;
+    const trimmed = newCommentText.trim();
+    if (!trimmed) {
+      setCommentError('Saisissez un commentaire.');
+      return;
+    }
+    setCommentBusy(true);
+    setCommentError('');
+    try {
+      const { error } = await supabase.from('project_comments').insert({
+        project_id: projectId,
+        author_id: userId,
+        content: trimmed,
+      });
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error) {
+        setCommentError('Impossible d’ajouter le commentaire.');
+        return;
+      }
+      setNewCommentText('');
+      const { data: commentRows } = await supabase.rpc('list_project_comments', { p_project_id: projectId });
+      if (mountedRef.current && commentRows) setProjectComments(commentRows as ProjectComment[]);
+    } catch {
+      if (mountedRef.current) setCommentError('Impossible d’ajouter le commentaire.');
+    } finally {
+      if (mountedRef.current) setCommentBusy(false);
+    }
+  }
+
+  async function saveProjectCommentEdit(projectId: string, commentId: string) {
+    if (commentBusy || signingOut) return;
+    const trimmed = editCommentText.trim();
+    if (!trimmed) {
+      setCommentError('Le commentaire ne peut pas être vide.');
+      return;
+    }
+    setCommentBusy(true);
+    setCommentError('');
+    try {
+      const { error } = await supabase
+        .from('project_comments')
+        .update({ content: trimmed, updated_at: new Date().toISOString() })
+        .eq('id', commentId);
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error) {
+        setCommentError('Impossible de modifier ce commentaire.');
+        return;
+      }
+      setEditingCommentId(null);
+      const { data: commentRows } = await supabase.rpc('list_project_comments', { p_project_id: projectId });
+      if (mountedRef.current && commentRows) setProjectComments(commentRows as ProjectComment[]);
+    } catch {
+      if (mountedRef.current) setCommentError('Impossible de modifier ce commentaire.');
+    } finally {
+      if (mountedRef.current) setCommentBusy(false);
+    }
+  }
+
+  async function deleteProjectComment(commentId: string) {
+    if (commentBusy || signingOut) return;
+    setCommentBusy(true);
+    setCommentError('');
+    try {
+      const { error } = await supabase.from('project_comments').delete().eq('id', commentId);
+      if (!mountedRef.current || signingOutRef.current) return;
+      if (error) {
+        setCommentError('Impossible de supprimer ce commentaire.');
+        return;
+      }
+      setProjectComments((prev) => prev.filter((c) => c.id !== commentId));
+    } catch {
+      if (mountedRef.current) setCommentError('Impossible de supprimer ce commentaire.');
+    } finally {
+      if (mountedRef.current) setCommentBusy(false);
     }
   }
 
@@ -2330,6 +2431,109 @@ export default function Projects() {
                         );
                       });
                     })()}
+                  </View>
+
+                  <View style={styles.membersSection}>
+                    <Text accessibilityRole="header" style={[styles.membersTitle, { color: theme.ink }]}>
+                      Commentaires du projet
+                    </Text>
+                    <TextInput
+                      accessibilityLabel="Nouveau commentaire sur le projet"
+                      placeholder="Ajouter un commentaire..."
+                      placeholderTextColor={theme.muted}
+                      editable={!commentBusy}
+                      multiline
+                      value={newCommentText}
+                      onChangeText={(val) => {
+                        setNewCommentText(val);
+                        if (commentError) setCommentError('');
+                      }}
+                      style={[styles.input, styles.textArea, { color: theme.ink, backgroundColor: theme.surface, borderColor: theme.border }]}
+                    />
+                    {!!commentError && <Text accessibilityRole="alert" style={[styles.fieldError, { color: theme.danger }]}>{commentError}</Text>}
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      disabled={commentBusy}
+                      onPress={() => addProjectComment(selectedProject.id)}
+                      style={[styles.primaryBtn, { backgroundColor: theme.primary, alignSelf: 'flex-start', opacity: commentBusy ? 0.7 : 1 }]}
+                    >
+                      <Text style={{ color: theme.onPrimary, fontWeight: '700', fontSize: 14 }}>Envoyer</Text>
+                    </TouchableOpacity>
+
+                    {projectComments.length === 0 ? (
+                      <Text style={[styles.metaText, { color: theme.muted }]}>Aucun commentaire pour le moment.</Text>
+                    ) : (
+                      projectComments.map((comment) => {
+                        const canManageComment =
+                          comment.author_id === userId || role === 'admin' || selectedProject.owner_id === userId;
+                        return (
+                          <View
+                            key={comment.id}
+                            style={[styles.memberRow, { backgroundColor: theme.surface, borderColor: theme.border, flexDirection: 'column', alignItems: 'flex-start', gap: 6 }]}
+                          >
+                            <Text style={[styles.metaText, { color: theme.muted }]}>
+                              {comment.author_name} · {formatDateFr(comment.created_at.slice(0, 10))}
+                            </Text>
+                            {editingCommentId === comment.id ? (
+                              <View style={{ width: '100%', gap: 8 }}>
+                                <TextInput
+                                  editable={!commentBusy}
+                                  multiline
+                                  value={editCommentText}
+                                  onChangeText={setEditCommentText}
+                                  style={[styles.input, styles.textArea, { color: theme.ink, backgroundColor: theme.raised, borderColor: theme.border }]}
+                                />
+                                <View style={styles.formActions}>
+                                  <TouchableOpacity
+                                    accessibilityRole="button"
+                                    disabled={commentBusy}
+                                    onPress={() => saveProjectCommentEdit(selectedProject.id, comment.id)}
+                                    style={[styles.calendarBtn, { backgroundColor: theme.primary, borderColor: theme.primary }]}
+                                  >
+                                    <Text style={{ color: theme.onPrimary, fontWeight: '700', fontSize: 13 }}>Enregistrer</Text>
+                                  </TouchableOpacity>
+                                  <TouchableOpacity
+                                    accessibilityRole="button"
+                                    disabled={commentBusy}
+                                    onPress={() => setEditingCommentId(null)}
+                                    style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                                  >
+                                    <Text style={[styles.calendarBtnText, { color: theme.ink }]}>Annuler</Text>
+                                  </TouchableOpacity>
+                                </View>
+                              </View>
+                            ) : (
+                              <>
+                                <Text style={[styles.memberName, { color: theme.ink }]}>{comment.content}</Text>
+                                {canManageComment && (
+                                  <View style={styles.formActions}>
+                                    <TouchableOpacity
+                                      accessibilityRole="button"
+                                      onPress={() => {
+                                        setEditingCommentId(comment.id);
+                                        setEditCommentText(comment.content);
+                                        setCommentError('');
+                                      }}
+                                      style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border }]}
+                                    >
+                                      <Text style={{ color: theme.ink, fontWeight: '600', fontSize: 13 }}>Modifier</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                      accessibilityRole="button"
+                                      disabled={commentBusy}
+                                      onPress={() => deleteProjectComment(comment.id)}
+                                      style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.danger }]}
+                                    >
+                                      <Text style={{ color: theme.danger, fontWeight: '600', fontSize: 13 }}>Supprimer</Text>
+                                    </TouchableOpacity>
+                                  </View>
+                                )}
+                              </>
+                            )}
+                          </View>
+                        );
+                      })
+                    )}
                   </View>
                 </View>
               )}
