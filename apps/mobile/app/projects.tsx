@@ -261,6 +261,9 @@ export default function Projects() {
   const [editingTaskCommentId, setEditingTaskCommentId] = useState<string | null>(null);
   const [editTaskCommentText, setEditTaskCommentText] = useState('');
 
+  const [globalProgress, setGlobalProgress] = useState<number | null>(null);
+  const [personalProgress, setPersonalProgress] = useState<number | null>(null);
+
   const verifyAndLoad = useCallback(async () => {
     const seq = ++checkSeqRef.current;
     try {
@@ -574,6 +577,14 @@ export default function Projects() {
       });
       if (!mountedRef.current || signingOutRef.current) return;
       setTaskComments((taskCommentRows ?? []) as TaskComment[]);
+
+      const { data: progressRows } = await supabase.rpc('get_project_progress', {
+        p_project_id: projectId,
+      });
+      if (!mountedRef.current || signingOutRef.current) return;
+      const prog = Array.isArray(progressRows) ? progressRows[0] : progressRows;
+      setGlobalProgress(typeof prog?.global_progress === 'number' ? prog.global_progress : null);
+      setPersonalProgress(typeof prog?.personal_progress === 'number' ? prog.personal_progress : null);
     } catch {
       if (!mountedRef.current || signingOutRef.current) return;
       setMemberError('Impossible de charger les membres du projet.');
@@ -1502,10 +1513,12 @@ export default function Projects() {
                         const doneTasks = isCurrent
                           ? tasks.filter((t) => t.status === 'done').length
                           : Number(project.done_count ?? 0);
-                        const pct = activeTasks > 0 ? Math.round((doneTasks / activeTasks) * 100) : 0;
+                        const pctLabel = isCurrent
+                          ? (globalProgress !== null ? `${globalProgress} %` : '—')
+                          : (activeTasks > 0 ? `${Math.round((doneTasks / activeTasks) * 100)} %` : '—');
                         return (
                           <Text style={[styles.metaText, { color: theme.muted }]}>
-                            Progression : {pct} % · {activeTasks} tâche{activeTasks > 1 ? 's' : ''}
+                            Progression : {pctLabel} · {activeTasks} tâche{activeTasks > 1 ? 's' : ''}
                           </Text>
                         );
                       })()}
@@ -1529,11 +1542,10 @@ export default function Projects() {
                   )}
                   {(() => {
                     const activeTasks = tasks.filter((t) => t.status !== 'cancelled').length;
-                    const doneTasks = tasks.filter((t) => t.status === 'done').length;
-                    const pct = activeTasks > 0 ? Math.round((doneTasks / activeTasks) * 100) : 0;
+                    const pctLabel = globalProgress !== null ? `${globalProgress} %` : '—';
                     return (
                       <Text style={[styles.detailMeta, { color: theme.muted }]}>
-                        Statut : {formatProjectStatus(selectedProject.status)} · Progression : {pct} % · {activeTasks} tâche{activeTasks > 1 ? 's' : ''}
+                        Statut : {formatProjectStatus(selectedProject.status)} · Progression : {pctLabel} · {activeTasks} tâche{activeTasks > 1 ? 's' : ''}
                       </Text>
                     );
                   })()}
@@ -1547,6 +1559,26 @@ export default function Projects() {
                       {formatDateFr(selectedProject.closed_at.slice(0, 10))}
                     </Text>
                   )}
+
+                  <View style={[styles.confirmBox, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                    <Text accessibilityRole="header" style={[styles.membersTitle, { color: theme.ink }]}>
+                      Tableau de bord
+                    </Text>
+                    <View style={styles.formActions}>
+                      <View style={{ flex: 1, minWidth: 130 }}>
+                        <Text style={[styles.metaText, { color: theme.muted }]}>Avancement global</Text>
+                        <Text style={[styles.detailTitle, { color: theme.primary }]}>
+                          {globalProgress !== null ? `${globalProgress} %` : '—'}
+                        </Text>
+                      </View>
+                      <View style={{ flex: 1, minWidth: 130 }}>
+                        <Text style={[styles.metaText, { color: theme.muted }]}>Avancement personnel</Text>
+                        <Text style={[styles.detailTitle, { color: theme.primary }]}>
+                          {personalProgress !== null ? `${personalProgress} %` : '—'}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
                   <Text style={[styles.detailBody, { color: theme.ink }]}>
                     {selectedProject.description || 'Aucune description renseignée.'}
                   </Text>
