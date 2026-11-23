@@ -1568,9 +1568,42 @@ export default function Projects() {
                   )}
 
                   <View style={[styles.confirmBox, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-                    <Text accessibilityRole="header" style={[styles.membersTitle, { color: theme.ink }]}>
-                      Tableau de bord
-                    </Text>
+                    <View style={styles.cardTop}>
+                      <Text accessibilityRole="header" style={[styles.membersTitle, { color: theme.ink }]}>
+                        Tableau de bord
+                      </Text>
+                      <TouchableOpacity
+                        accessibilityRole="button"
+                        accessibilityLabel="Actualiser le tableau de bord"
+                        disabled={refreshing || signingOut}
+                        onPress={refreshAll}
+                        style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.border, opacity: refreshing ? 0.6 : 1 }]}
+                      >
+                        <Text style={[styles.calendarBtnText, { color: theme.ink }]}>
+                          {refreshing ? 'Actualisation...' : 'Actualiser'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                    {!!lastUpdatedAt && (
+                      <Text style={[styles.metaText, { color: theme.muted }]}>
+                        Dernière mise à jour : {lastUpdatedAt}
+                      </Text>
+                    )}
+                    {!!refreshError && (
+                      <View style={[styles.formActions, { marginTop: 4 }]}>
+                        <Text accessibilityRole="alert" style={[styles.fieldError, { color: theme.danger, flex: 1 }]}>
+                          {refreshError}
+                        </Text>
+                        <TouchableOpacity
+                          accessibilityRole="button"
+                          disabled={refreshing}
+                          onPress={refreshAll}
+                          style={[styles.calendarBtn, { backgroundColor: theme.subtle, borderColor: theme.primary }]}
+                        >
+                          <Text style={{ color: theme.primary, fontWeight: '600', fontSize: 13 }}>Réessayer</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
                     <View style={styles.formActions}>
                       <View style={{ flex: 1, minWidth: 130 }}>
                         <Text style={[styles.metaText, { color: theme.muted }]}>Avancement global</Text>
