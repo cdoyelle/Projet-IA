@@ -263,6 +263,7 @@ export default function Projects() {
 
   const [globalProgress, setGlobalProgress] = useState<number | null>(null);
   const [personalProgress, setPersonalProgress] = useState<number | null>(null);
+  const [dashboardCounts, setDashboardCounts] = useState({ created: 0, in_progress: 0, done: 0, overdue: 0 });
 
   const verifyAndLoad = useCallback(async () => {
     const seq = ++checkSeqRef.current;
@@ -585,6 +586,12 @@ export default function Projects() {
       const prog = Array.isArray(progressRows) ? progressRows[0] : progressRows;
       setGlobalProgress(typeof prog?.global_progress === 'number' ? prog.global_progress : null);
       setPersonalProgress(typeof prog?.personal_progress === 'number' ? prog.personal_progress : null);
+      setDashboardCounts({
+        created: Number(prog?.created_count ?? 0),
+        in_progress: Number(prog?.in_progress_count ?? 0),
+        done: Number(prog?.done_count ?? 0),
+        overdue: Number(prog?.overdue_count ?? 0),
+      });
     } catch {
       if (!mountedRef.current || signingOutRef.current) return;
       setMemberError('Impossible de charger les membres du projet.');
@@ -1575,6 +1582,26 @@ export default function Projects() {
                         <Text style={[styles.metaText, { color: theme.muted }]}>Avancement personnel</Text>
                         <Text style={[styles.detailTitle, { color: theme.primary }]}>
                           {personalProgress !== null ? `${personalProgress} %` : '—'}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={[styles.formActions, { marginTop: 8 }]}>
+                      <View style={{ flex: 1, minWidth: 70 }}>
+                        <Text style={[styles.metaText, { color: theme.muted }]}>Créées</Text>
+                        <Text style={[styles.memberName, { color: theme.ink }]}>{dashboardCounts.created}</Text>
+                      </View>
+                      <View style={{ flex: 1, minWidth: 70 }}>
+                        <Text style={[styles.metaText, { color: theme.muted }]}>En cours</Text>
+                        <Text style={[styles.memberName, { color: theme.ink }]}>{dashboardCounts.in_progress}</Text>
+                      </View>
+                      <View style={{ flex: 1, minWidth: 70 }}>
+                        <Text style={[styles.metaText, { color: theme.muted }]}>Terminées</Text>
+                        <Text style={[styles.memberName, { color: theme.ink }]}>{dashboardCounts.done}</Text>
+                      </View>
+                      <View style={{ flex: 1, minWidth: 70 }}>
+                        <Text style={[styles.metaText, { color: theme.muted }]}>En retard</Text>
+                        <Text style={[styles.memberName, { color: dashboardCounts.overdue > 0 ? theme.danger : theme.ink }]}>
+                          {dashboardCounts.overdue}
                         </Text>
                       </View>
                     </View>
