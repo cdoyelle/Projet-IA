@@ -14,18 +14,28 @@ function json(body: Record<string, unknown>, status = 200) {
 }
 
 async function embedText(apiKey: string, text: string): Promise<number[]> {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: { parts: [{ text }] } }),
+  const models = [
+    { name: 'text-embedding-004', extra: {} },
+    { name: 'gemini-embedding-001', extra: { outputDimensionality: 768 } },
+  ];
+  let lastError = 'Embedding failed';
+  for (const m of models) {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${m.name}:embedContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: { parts: [{ text }] }, ...m.extra }),
+      }
+    );
+    if (res.ok) {
+      const data = (await res.json()) as { embedding?: { values?: number[] } };
+      if (data.embedding?.values) return data.embedding.values;
+    } else {
+      lastError = `${m.name}: ${res.status} ${await res.text()}`;
     }
-  );
-  if (!res.ok) throw new Error('Embedding failed');
-  const data = (await res.json()) as { embedding?: { values?: number[] } };
-  if (!data.embedding?.values) throw new Error('Missing embedding values');
-  return data.embedding.values;
+  }
+  throw new Error(lastError);
 }
 
 async function generateAnswer(apiKey: string, question: string, passages: { document_title: string; content: string }[]): Promise<string> {
@@ -45,25 +55,53 @@ ${contextText}
 
 Question : ${question}`;
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1 },
-      }),
+  const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'];
+  try {
+    const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    if (listRes.ok) {
+      const listData = (await listRes.json()) as {
+        models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
+      };
+      for (const m of listData.models ?? []) {
+        const shortName = m.name?.replace(/^models\//, '') ?? '';
+        if (
+          shortName.includes('gemini') &&
+          m.supportedGenerationMethods?.includes('generateContent') &&
+          !models.includes(shortName)
+        ) {
+          models.push(shortName);
+        }
+      }
     }
-  );
-  if (!res.ok) throw new Error('Generation failed');
-  const data = (await res.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
-  return (
-    data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
-    "Je ne sais pas répondre à cette question à partir des documents disponibles. Merci de vous rapprocher de l'administrateur."
-  );
+  } catch {
+    // Keep default model list if ListModels fails.
+  }
+
+  let lastError = 'Generation failed';
+  for (const model of models) {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.1 },
+        }),
+      }
+    );
+    if (res.ok) {
+      const data = (await res.json()) as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      };
+      return (
+        data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
+        "Je ne sais pas répondre à cette question à partir des documents disponibles. Merci de vous rapprocher de l'administrateur."
+      );
+    }
+    lastError = `${model}: ${res.status} ${await res.text()}`;
+  }
+  throw new Error(lastError);
 }
 
 function splitPassages(content: string, maxLen = 800): string[] {
@@ -134,17 +172,22 @@ Deno.serve(async (request) => {
       .single();
     if (docError || !doc) return json({ code: 'SERVER_ERROR' }, 500);
 
-    const passages = splitPassages(content);
-    for (let i = 0; i < passages.length; i += 1) {
-      const embedding = await embedText(geminiKey, passages[i]);
-      await admin.from('assistant_chunks').insert({
-        document_id: doc.id,
-        passage_index: i,
-        content: passages[i],
-        embedding,
-      });
+    try {
+      const passages = splitPassages(content);
+      for (let i = 0; i < passages.length; i += 1) {
+        const embedding = await embedText(geminiKey, passages[i]);
+        const { error: chunkErr } = await admin.from('assistant_chunks').insert({
+          document_id: doc.id,
+          passage_index: i,
+          content: passages[i],
+          embedding,
+        });
+        if (chunkErr) return json({ code: 'SERVER_ERROR', details: chunkErr.message }, 500);
+      }
+      return json({ id: doc.id, passages: passages.length }, 201);
+    } catch (err) {
+      return json({ code: 'AI_UNAVAILABLE', details: err instanceof Error ? err.message : String(err) }, 500);
     }
-    return json({ id: doc.id, passages: passages.length }, 201);
   }
 
   const question = typeof body.question === 'string' ? body.question.trim() : '';
@@ -156,7 +199,7 @@ Deno.serve(async (request) => {
       query_embedding: queryEmbedding,
       match_count: 4,
     });
-    if (matchError) return json({ code: 'AI_UNAVAILABLE' }, 500);
+    if (matchError) return json({ code: 'AI_UNAVAILABLE', details: matchError.message }, 500);
 
     const relevant = ((matches ?? []) as Array<{ document_title: string; filename: string; content: string; similarity: number }>)
       .filter((m) => m.similarity >= 0.45);
@@ -178,7 +221,7 @@ Deno.serve(async (request) => {
         passage: r.content,
       })),
     });
-  } catch {
-    return json({ code: 'AI_UNAVAILABLE' }, 500);
+  } catch (err) {
+    return json({ code: 'AI_UNAVAILABLE', details: err instanceof Error ? err.message : String(err) }, 500);
   }
 });

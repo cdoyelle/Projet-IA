@@ -85,16 +85,23 @@ export default function Assistant() {
     setLoading(true);
 
     try {
-      const { data, error: fnError } = await supabase.functions.invoke<{
+      const { data, error: fnError, response } = await supabase.functions.invoke<{
         found?: boolean;
         answer?: string;
         citations?: Citation[];
+        code?: string;
+        details?: string;
       }>('project-assistant', {
         body: { action: 'ask', question: trimmed },
       });
       if (!mountedRef.current) return;
-      if (fnError || !data?.answer) {
-        setError('L’assistant est momentanément indisponible. Réessayez plus tard.');
+      const parsed = typeof data === 'string' ? (JSON.parse(data) as typeof data) : data;
+      if (fnError || !parsed?.answer) {
+        let extra = parsed?.details ?? parsed?.code ?? '';
+        if (!extra && response) {
+          try { extra = await response.text(); } catch { /* ignore */ }
+        }
+        setError(`L’assistant est momentanément indisponible.${extra ? ` (${extra})` : ''}`);
         return;
       }
       setMessages((prev) => [
@@ -102,8 +109,8 @@ export default function Assistant() {
         {
           id: `a-${Date.now()}`,
           sender: 'assistant',
-          text: data.answer!,
-          citations: data.citations ?? [],
+          text: parsed.answer!,
+          citations: parsed.citations ?? [],
         },
       ]);
     } catch {
