@@ -242,6 +242,25 @@ export default function Home() {
             </Pressable>
             <Pressable
               accessibilityRole="button"
+              accessibilityLabel="Assistant"
+              disabled={signingOut}
+              onPress={() => router.replace('/assistant')}
+              style={({ pressed }) => [
+                styles.secondaryAction,
+                {
+                  marginTop: 10,
+                  backgroundColor: theme.subtle,
+                  borderColor: theme.border,
+                  opacity: pressed || signingOut ? 0.8 : 1,
+                },
+              ]}
+            >
+              <Text style={[styles.secondaryActionText, { color: theme.ink }]}>
+                Assistant
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
               accessibilityLabel="Mon profil"
               disabled={signingOut}
               onPress={() => router.replace('/profile')}
