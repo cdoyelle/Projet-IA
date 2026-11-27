@@ -60,27 +60,7 @@ ${contextText}
 
 Question : ${question}`;
 
-  const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'];
-  try {
-    const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
-    if (listRes.ok) {
-      const listData = (await listRes.json()) as {
-        models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
-      };
-      for (const m of listData.models ?? []) {
-        const shortName = m.name?.replace(/^models\//, '') ?? '';
-        if (
-          shortName.includes('gemini') &&
-          m.supportedGenerationMethods?.includes('generateContent') &&
-          !models.includes(shortName)
-        ) {
-          models.push(shortName);
-        }
-      }
-    }
-  } catch {
-    // Keep default model list if ListModels fails.
-  }
+  const models = ['gemini-3.5-flash-lite', 'gemini-2.5-flash'];
 
   let lastError = 'Generation failed';
   for (const model of models) {
