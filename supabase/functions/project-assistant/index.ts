@@ -38,7 +38,11 @@ async function embedText(apiKey: string, text: string): Promise<number[]> {
   throw new Error(lastError);
 }
 
-async function generateAnswer(apiKey: string, question: string, passages: { document_title: string; content: string }[]): Promise<string> {
+async function generateAnswer(
+  apiKey: string,
+  question: string,
+  passages: { document_title: string; content: string }[]
+): Promise<{ answer: string; usedIndices: number[] }> {
   const contextText = passages
     .map((p, i) => `[Passage ${i + 1} - Document: ${p.document_title}]\n${p.content}`)
     .join('\n\n');
@@ -47,8 +51,9 @@ async function generateAnswer(apiKey: string, question: string, passages: { docu
 Règles strictes :
 1. Réponds UNIQUEMENT à partir des passages fournis ci-dessous.
 2. N'invente aucune information.
-3. Si la réponse ne se trouve pas clairement dans les passages, réponds exactement : "Je ne sais pas répondre à cette question à partir des documents disponibles. Merci de vous rapprocher de l'administrateur."
+3. Si la réponse ne se trouve pas clairement dans les passages, réponds exactement : "Je ne sais pas répondre à cette question à partir des documents disponibles. Merci de vous rapprocher de l'administrateur." et mets used_passages à [].
 4. Cite le nom du document utilisé dans ta réponse.
+5. Réponds STRICTEMENT au format JSON valide : {"answer": "...", "used_passages": [1]} où used_passages contient uniquement les numéros (1, 2, ...) des passages qui ont réellement servi à répondre.
 
 Passages :
 ${contextText}
@@ -86,7 +91,7 @@ Question : ${question}`;
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.1 },
+          generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
         }),
       }
     );
@@ -94,10 +99,24 @@ Question : ${question}`;
       const data = (await res.json()) as {
         candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
       };
-      return (
-        data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
-        "Je ne sais pas répondre à cette question à partir des documents disponibles. Merci de vous rapprocher de l'administrateur."
-      );
+      const raw = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
+      try {
+        const parsed = JSON.parse(raw) as { answer?: string; used_passages?: number[] };
+        const answer =
+          parsed.answer?.trim() ||
+          "Je ne sais pas répondre à cette question à partir des documents disponibles. Merci de vous rapprocher de l'administrateur.";
+        const usedIndices = Array.isArray(parsed.used_passages)
+          ? parsed.used_passages.filter((n) => typeof n === 'number' && n >= 1 && n <= passages.length)
+          : [];
+        return { answer, usedIndices };
+      } catch {
+        return {
+          answer:
+            raw ||
+            "Je ne sais pas répondre à cette question à partir des documents disponibles. Merci de vous rapprocher de l'administrateur.",
+          usedIndices: raw ? [1] : [],
+        };
+      }
     }
     lastError = `${model}: ${res.status} ${await res.text()}`;
   }
@@ -212,11 +231,12 @@ Deno.serve(async (request) => {
       });
     }
 
-    const answer = await generateAnswer(geminiKey, question, relevant);
+    const { answer, usedIndices } = await generateAnswer(geminiKey, question, relevant);
+    const citedPassages = usedIndices.map((idx) => relevant[idx - 1]).filter(Boolean);
     return json({
-      found: true,
+      found: citedPassages.length > 0,
       answer,
-      citations: relevant.map((r) => ({
+      citations: citedPassages.map((r) => ({
         document: r.document_title,
         passage: r.content,
       })),
