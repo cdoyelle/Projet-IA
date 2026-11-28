@@ -18,3 +18,10 @@
 - Sur l’écran **Projets** et dans le **Tableau de bord**, touchez **« Actualiser »** ou tirez l’écran vers le bas pour recharger les dernières modifications de l’équipe.
 - L’heure de la dernière actualisation réussie est affichée (*« Dernière mise à jour : ... »*).
 - En cas de coupure réseau, les données déjà affichées et vos saisies en cours sont conservées, et un bouton **« Réessayer »** apparaît.
+
+## 5. Où trouver vos tâches et informations personnelles dans l’application
+L’assistant ne consulte pas vos données personnelles ni vos tâches individuelles, mais voici comment les retrouver directement dans l’application :
+- **Voir mes tâches en retard** : ouvrez **Projets**, sélectionnez un projet, touchez **« Filtrer et trier »** puis choisissez **Échéance : En retard** (le total apparaît aussi dans **Tableau de bord → En retard**).
+- **Voir mes tâches prioritaires ou non attribuées** : ouvrez **Projets → Filtrer et trier** et filtrez par **Priorité** ou **Membre : Non attribuée**.
+- **Voir le responsable ou les membres d’un projet** : ouvrez **Projets** et sélectionnez le projet pour voir **« Créé par ... »** et la section **« Membres du projet »**.
+- **Voir l’avancement d’un projet** : ouvrez **Projets** et consultez l’encadré **« Tableau de bord »**.
