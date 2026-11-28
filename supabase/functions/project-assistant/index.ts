@@ -192,18 +192,94 @@ Deno.serve(async (request) => {
   const question = typeof body.question === 'string' ? body.question.trim() : '';
   if (!question) return json({ code: 'VALIDATION_ERROR' }, 400);
 
+  const { data: settingsRow } = await admin
+    .from('assistant_settings')
+    .select('enabled, daily_limit_per_user, monthly_budget_eur, alert_threshold_pct, estimated_cost_per_question_eur')
+    .eq('id', 1)
+    .maybeSingle();
+
+  const settings = settingsRow ?? {
+    enabled: true,
+    daily_limit_per_user: 20,
+    monthly_budget_eur: 5,
+    alert_threshold_pct: 80,
+    estimated_cost_per_question_eur: 0.0003,
+  };
+
+  if (!settings.enabled) {
+    await admin.from('assistant_logs').insert({ question, found: false, status: 'disabled', estimated_cost_eur: 0 });
+    return json({
+      found: false,
+      answer: "L’assistant est actuellement désactivé par l’administrateur.",
+      citations: [],
+    });
+  }
+
+  const monthStart = new Date();
+  monthStart.setUTCDate(1);
+  monthStart.setUTCHours(0, 0, 0, 0);
+  const { data: monthLogs } = await admin
+    .from('assistant_logs')
+    .select('estimated_cost_eur')
+    .gte('created_at', monthStart.toISOString());
+  const monthlySpend = (monthLogs ?? []).reduce((acc, r) => acc + Number(r.estimated_cost_eur ?? 0), 0);
+
+  if (monthlySpend >= Number(settings.monthly_budget_eur)) {
+    await admin.from('assistant_logs').insert({ question, found: false, status: 'blocked_budget', estimated_cost_eur: 0 });
+    return json({
+      found: false,
+      answer: "Le plafond mensuel de l’assistant est atteint. Merci de contacter l’administrateur.",
+      citations: [],
+    });
+  }
+  if (monthlySpend >= Number(settings.monthly_budget_eur) * (Number(settings.alert_threshold_pct) / 100)) {
+    console.warn(`[ALERT] Budget mensuel assistant >= ${settings.alert_threshold_pct}% (${monthlySpend.toFixed(4)} EUR)`);
+  }
+
+  const todayDate = new Date().toISOString().slice(0, 10);
+  const { data: usageRow } = await admin
+    .from('assistant_daily_usage')
+    .select('question_count')
+    .eq('user_id', authData.user.id)
+    .eq('usage_date', todayDate)
+    .maybeSingle();
+  const currentCount = Number(usageRow?.question_count ?? 0);
+
+  if (currentCount >= Number(settings.daily_limit_per_user)) {
+    await admin.from('assistant_logs').insert({ question, found: false, status: 'blocked_quota', estimated_cost_eur: 0 });
+    return json({
+      found: false,
+      answer: "Vous avez atteint votre limite quotidienne de questions. Réessayez demain.",
+      citations: [],
+    });
+  }
+
   try {
     const queryEmbedding = await embedText(geminiKey, question);
     const { data: matches, error: matchError } = await callerClient.rpc('match_assistant_chunks', {
       query_embedding: queryEmbedding,
       match_count: 4,
     });
-    if (matchError) return json({ code: 'AI_UNAVAILABLE', details: matchError.message }, 500);
+    if (matchError) {
+      await admin.from('assistant_logs').insert({ question, found: false, status: 'fallback', estimated_cost_eur: 0 });
+      return json({
+        found: false,
+        answer: "L’assistant est temporairement indisponible. Merci de réessayer plus tard ou de contacter l’administrateur.",
+        citations: [],
+      });
+    }
 
     const relevant = ((matches ?? []) as Array<{ document_title: string; filename: string; content: string; similarity: number }>)
       .filter((m) => m.similarity >= 0.45);
 
+    const cost = Number(settings.estimated_cost_per_question_eur ?? 0.0003);
+    await admin.from('assistant_daily_usage').upsert(
+      { user_id: authData.user.id, usage_date: todayDate, question_count: currentCount + 1 },
+      { onConflict: 'user_id,usage_date' }
+    );
+
     if (relevant.length === 0) {
+      await admin.from('assistant_logs').insert({ question, found: false, status: 'ok', estimated_cost_eur: cost });
       return json({
         found: false,
         answer: "Je ne sais pas répondre à cette question à partir des documents disponibles. Merci de vous rapprocher de l'administrateur.",
@@ -213,6 +289,12 @@ Deno.serve(async (request) => {
 
     const { answer, usedIndices } = await generateAnswer(geminiKey, question, relevant);
     const citedPassages = usedIndices.map((idx) => relevant[idx - 1]).filter(Boolean);
+    await admin.from('assistant_logs').insert({
+      question,
+      found: citedPassages.length > 0,
+      status: 'ok',
+      estimated_cost_eur: cost,
+    });
     return json({
       found: citedPassages.length > 0,
       answer,
@@ -221,7 +303,12 @@ Deno.serve(async (request) => {
         passage: r.content,
       })),
     });
-  } catch (err) {
-    return json({ code: 'AI_UNAVAILABLE', details: err instanceof Error ? err.message : String(err) }, 500);
+  } catch {
+    await admin.from('assistant_logs').insert({ question, found: false, status: 'fallback', estimated_cost_eur: 0 });
+    return json({
+      found: false,
+      answer: "L’assistant est temporairement indisponible. Merci de réessayer plus tard ou de contacter l’administrateur.",
+      citations: [],
+    });
   }
 });

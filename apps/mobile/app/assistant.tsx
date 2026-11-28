@@ -150,6 +150,12 @@ export default function Assistant() {
             </TouchableOpacity>
           </View>
 
+          <View style={[styles.aiBanner, { backgroundColor: theme.raised, borderColor: theme.border }]}>
+            <Text style={[styles.aiBannerText, { color: theme.muted }]}>
+              Vous échangez avec un assistant IA (réponses basées uniquement sur les documents de l’application).
+            </Text>
+          </View>
+
           <ScrollView style={styles.messagesList} contentContainerStyle={{ gap: 12, paddingVertical: 12 }}>
             {messages.map((msg) => (
               <View
@@ -220,6 +226,8 @@ const styles = StyleSheet.create({
   title: { fontSize: 26, fontWeight: '700' },
   headerBtn: { minHeight: 44, paddingHorizontal: 14, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   headerBtnText: { fontWeight: '600', fontSize: 15 },
+  aiBanner: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 4 },
+  aiBannerText: { fontSize: 13, lineHeight: 18 },
   messagesList: { flex: 1 },
   bubble: { maxWidth: '88%', borderRadius: 16, padding: 14 },
   citationsBox: { marginTop: 10, gap: 6 },
