@@ -15,6 +15,8 @@ type Message = {
   sender: 'user' | 'assistant';
   text: string;
   citations?: Citation[];
+  metricId?: string | null;
+  feedback?: 'up' | 'down';
 };
 
 export default function Assistant() {
@@ -87,6 +89,7 @@ export default function Assistant() {
     try {
       const { data, error: fnError, response } = await supabase.functions.invoke<{
         found?: boolean;
+        metricId?: string | null;
         answer?: string;
         citations?: Citation[];
         code?: string;
@@ -111,6 +114,7 @@ export default function Assistant() {
           sender: 'assistant',
           text: parsed.answer!,
           citations: parsed.citations ?? [],
+          metricId: parsed.metricId ?? null,
         },
       ]);
     } catch {
@@ -119,6 +123,20 @@ export default function Assistant() {
       }
     } finally {
       if (mountedRef.current) setLoading(false);
+    }
+  }
+
+  async function sendFeedback(messageId: string, metricId: string, vote: 'up' | 'down') {
+    setMessages((prev) =>
+      prev.map((m) => (m.id === messageId ? { ...m, feedback: vote } : m))
+    );
+    try {
+      await supabase.rpc('submit_assistant_feedback', {
+        p_metric_id: metricId,
+        p_feedback: vote,
+      });
+    } catch {
+      // Ignore feedback network errors.
     }
   }
 
@@ -181,6 +199,38 @@ export default function Assistant() {
                     ))}
                   </View>
                 )}
+                {msg.sender === 'assistant' && !!msg.metricId && (
+                  <View style={styles.feedbackRow}>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel="Réponse utile"
+                      onPress={() => sendFeedback(msg.id, msg.metricId!, 'up')}
+                      style={[
+                        styles.feedbackBtn,
+                        {
+                          backgroundColor: theme.surface,
+                          borderColor: msg.feedback === 'up' ? theme.primary : theme.border,
+                        },
+                      ]}
+                    >
+                      <Text style={{ fontSize: 14 }}>👍</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel="Réponse inutile"
+                      onPress={() => sendFeedback(msg.id, msg.metricId!, 'down')}
+                      style={[
+                        styles.feedbackBtn,
+                        {
+                          backgroundColor: theme.surface,
+                          borderColor: msg.feedback === 'down' ? theme.danger : theme.border,
+                        },
+                      ]}
+                    >
+                      <Text style={{ fontSize: 14 }}>👎</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
               </View>
             ))}
             {loading && <ActivityIndicator color={theme.primary} style={{ alignSelf: 'flex-start', marginTop: 6 }} />}
@@ -235,6 +285,8 @@ const styles = StyleSheet.create({
   citationCard: { borderWidth: 1, borderRadius: 10, padding: 10, gap: 4 },
   citationDoc: { fontSize: 13, fontWeight: '700' },
   citationPassage: { fontSize: 13, lineHeight: 18 },
+  feedbackRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  feedbackBtn: { minHeight: 34, minWidth: 40, borderWidth: 1, borderRadius: 8, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
   errorText: { fontSize: 14, marginBottom: 8 },
   inputRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 8 },
   input: { flex: 1, minHeight: 48, borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, fontSize: 16 },

@@ -42,7 +42,14 @@ async function generateAnswer(
   apiKey: string,
   question: string,
   passages: { document_title: string; content: string }[]
-): Promise<{ answer: string; usedIndices: number[] }> {
+): Promise<{
+  answer: string;
+  usedIndices: number[];
+  modelUsed: string;
+  inputTokens: number;
+  outputTokens: number;
+  ttftMs: number;
+}> {
   const contextText = passages
     .map((p, i) => `[Passage ${i + 1} - Document: ${p.document_title}]\n${p.content}`)
     .join('\n\n');
@@ -64,6 +71,7 @@ Question : ${question}`;
 
   let lastError = 'Generation failed';
   for (const model of models) {
+    const genStart = performance.now();
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
       {
@@ -76,9 +84,13 @@ Question : ${question}`;
       }
     );
     if (res.ok) {
+      const ttftMs = Math.round(performance.now() - genStart);
       const data = (await res.json()) as {
         candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+        usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
       };
+      const inputTokens = Number(data.usageMetadata?.promptTokenCount ?? 0);
+      const outputTokens = Number(data.usageMetadata?.candidatesTokenCount ?? 0);
       const raw = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
       try {
         const parsed = JSON.parse(raw) as { answer?: string; used_passages?: number[] };
@@ -88,13 +100,17 @@ Question : ${question}`;
         const usedIndices = Array.isArray(parsed.used_passages)
           ? parsed.used_passages.filter((n) => typeof n === 'number' && n >= 1 && n <= passages.length)
           : [];
-        return { answer, usedIndices };
+        return { answer, usedIndices, modelUsed: model, inputTokens, outputTokens, ttftMs };
       } catch {
         return {
           answer:
             raw ||
             "Je ne sais pas répondre à cette question à partir des documents disponibles. Merci de vous rapprocher de l'administrateur.",
           usedIndices: raw ? [1] : [],
+          modelUsed: model,
+          inputTokens,
+          outputTokens,
+          ttftMs,
         };
       }
     }
@@ -254,6 +270,7 @@ Deno.serve(async (request) => {
     });
   }
 
+  const reqStart = performance.now();
   try {
     const queryEmbedding = await embedText(geminiKey, question);
     const { data: matches, error: matchError } = await callerClient.rpc('match_assistant_chunks', {
@@ -280,23 +297,60 @@ Deno.serve(async (request) => {
 
     if (relevant.length === 0) {
       await admin.from('assistant_logs').insert({ question, found: false, status: 'ok', estimated_cost_eur: cost });
+      const { data: metricRow } = await admin
+        .from('assistant_metrics')
+        .insert({
+          user_role: profile.role,
+          model_used: 'embedding-only',
+          ttft_ms: Math.round(performance.now() - reqStart),
+          total_ms: Math.round(performance.now() - reqStart),
+          input_tokens: 0,
+          output_tokens: 0,
+          estimated_cost_eur: cost,
+          passages_count: 0,
+          is_unknown: true,
+        })
+        .select('id')
+        .single();
       return json({
         found: false,
+        metricId: metricRow?.id ?? null,
         answer: "Je ne sais pas répondre à cette question à partir des documents disponibles. Merci de vous rapprocher de l'administrateur.",
         citations: [],
       });
     }
 
-    const { answer, usedIndices } = await generateAnswer(geminiKey, question, relevant);
+    const { answer, usedIndices, modelUsed, inputTokens, outputTokens, ttftMs } = await generateAnswer(
+      geminiKey,
+      question,
+      relevant
+    );
     const citedPassages = usedIndices.map((idx) => relevant[idx - 1]).filter(Boolean);
+    const isUnknown = citedPassages.length === 0 || answer.toLowerCase().includes('je ne sais pas');
     await admin.from('assistant_logs').insert({
       question,
       found: citedPassages.length > 0,
       status: 'ok',
       estimated_cost_eur: cost,
     });
+    const { data: metricRow } = await admin
+      .from('assistant_metrics')
+      .insert({
+        user_role: profile.role,
+        model_used: modelUsed,
+        ttft_ms: ttftMs,
+        total_ms: Math.round(performance.now() - reqStart),
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        estimated_cost_eur: cost,
+        passages_count: citedPassages.length,
+        is_unknown: isUnknown,
+      })
+      .select('id')
+      .single();
     return json({
       found: citedPassages.length > 0,
+      metricId: metricRow?.id ?? null,
       answer,
       citations: citedPassages.map((r) => ({
         document: r.document_title,
