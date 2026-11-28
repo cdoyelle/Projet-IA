@@ -126,10 +126,11 @@ export default function Assistant() {
     }
   }
 
-  async function sendFeedback(messageId: string, metricId: string, vote: 'up' | 'down') {
+  async function sendFeedback(messageId: string, metricId: string | null | undefined, vote: 'up' | 'down') {
     setMessages((prev) =>
       prev.map((m) => (m.id === messageId ? { ...m, feedback: vote } : m))
     );
+    if (!metricId) return;
     try {
       await supabase.rpc('submit_assistant_feedback', {
         p_metric_id: metricId,
@@ -199,12 +200,12 @@ export default function Assistant() {
                     ))}
                   </View>
                 )}
-                {msg.sender === 'assistant' && !!msg.metricId && (
+                {msg.sender === 'assistant' && msg.id !== 'welcome' && (
                   <View style={styles.feedbackRow}>
                     <TouchableOpacity
                       accessibilityRole="button"
                       accessibilityLabel="Réponse utile"
-                      onPress={() => sendFeedback(msg.id, msg.metricId!, 'up')}
+                      onPress={() => sendFeedback(msg.id, msg.metricId, 'up')}
                       style={[
                         styles.feedbackBtn,
                         {
@@ -218,7 +219,7 @@ export default function Assistant() {
                     <TouchableOpacity
                       accessibilityRole="button"
                       accessibilityLabel="Réponse inutile"
-                      onPress={() => sendFeedback(msg.id, msg.metricId!, 'down')}
+                      onPress={() => sendFeedback(msg.id, msg.metricId, 'down')}
                       style={[
                         styles.feedbackBtn,
                         {
